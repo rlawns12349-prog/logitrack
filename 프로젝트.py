@@ -45,7 +45,7 @@ class DBManager:
 db = DBManager()
 
 # --- 3. 데이터 엔진 (카카오 로컬 & OSRM) ---
-KAKAO_API_KEY = "d85785ce3382a3fdb11f6a2dd4f6421a"
+KAKAO_API_KEY = "fe0dfac392ddccedff5878a56a36feb9"
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_kakao_coordinate(address):
