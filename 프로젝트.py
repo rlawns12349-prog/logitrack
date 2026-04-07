@@ -7,16 +7,18 @@ import pandas as pd
 import math
 from datetime import datetime, timedelta
 import sqlite3
+import json
 
 # --- 1. 환경 설정 및 스타일링 ---
-st.set_page_config(page_title="LogiTrack Pro v17.0 (Kakao Edition)", layout="wide")
+st.set_page_config(page_title="LogiTrack Pro v22.1 (Bug Fixes)", layout="wide")
 
 st.markdown("""
     <style>
-    [data-testid="stMetricValue"] { font-size: 1.8rem; color: #004aad; font-weight: bold; }
+    [data-testid="stMetricValue"] { font-size: 1.8rem; color: #4dabf7; font-weight: bold; }
     .stButton>button { border-radius: 6px; font-weight: bold; transition: 0.2s; }
-    .stTable { font-size: 0.85rem !important; }
-    div[data-testid="stToast"] { border-left: 5px solid #004aad; }
+    .stTable { font-size: 0.9rem !important; text-align: center; }
+    th { text-align: center !important; }
+    div[data-testid="stToast"] { border-left: 5px solid #4dabf7; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -25,145 +27,215 @@ class DBManager:
     def __init__(self, db_name='logitrack_final.db'):
         self.db_name = db_name
         self.init_db()
+        
     def init_db(self):
         with sqlite3.connect(self.db_name) as conn:
             conn.execute('''CREATE TABLE IF NOT EXISTS locations
                          (name TEXT UNIQUE, lat REAL, lon REAL, addr TEXT)''')
-    def load_all(self):
+            conn.execute('''CREATE TABLE IF NOT EXISTS scenarios
+                         (s_name TEXT UNIQUE, targets_data TEXT, result_data TEXT, created_at TEXT)''')
+            
+    def load_all_locations(self):
         with sqlite3.connect(self.db_name) as conn:
             return pd.read_sql_query("SELECT * FROM locations", conn).to_dict('records')
-    def insert(self, name, lat, lon, addr):
+            
+    def insert_location(self, name, lat, lon, addr):
         try:
             with sqlite3.connect(self.db_name) as conn:
                 conn.execute("INSERT INTO locations VALUES (?,?,?,?)", (name, lat, lon, addr))
             return True
         except sqlite3.IntegrityError: return False
-    def delete(self, name):
+
+    def delete_location(self, name):
         with sqlite3.connect(self.db_name) as conn:
             conn.execute("DELETE FROM locations WHERE name=?", (name,))
 
+    def save_scenario(self, s_name, targets, result):
+        try:
+            t_json = json.dumps(targets)
+            r_json = json.dumps(result)
+            now = datetime.now().strftime("%Y-%m-%d %H:%M")
+            with sqlite3.connect(self.db_name) as conn:
+                conn.execute("INSERT OR REPLACE INTO scenarios VALUES (?,?,?,?)", (s_name, t_json, r_json, now))
+            return True
+        except: return False
+
+    def load_scenarios(self):
+        with sqlite3.connect(self.db_name) as conn:
+            return pd.read_sql_query("SELECT * FROM scenarios ORDER BY created_at DESC", conn).to_dict('records')
+
+    def delete_scenario(self, s_name):
+        with sqlite3.connect(self.db_name) as conn:
+            conn.execute("DELETE FROM scenarios WHERE s_name=?", (s_name,))
+
 db = DBManager()
 
-# --- 3. 데이터 엔진 (카카오 로컬 & OSRM) ---
+# --- 3. 데이터 엔진 (카카오 API) ---
 KAKAO_API_KEY = "fe0dfac392ddccedff5878a56a36feb9"
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_kakao_coordinate(address):
-    """카카오 로컬 API를 활용한 고정밀 주소 검색"""
     url = "https://dapi.kakao.com/v2/local/search/address.json"
     headers = {"Authorization": f"KakaoAK {KAKAO_API_KEY}"}
     params = {"query": address}
     try:
-        res = requests.get(url, headers=headers, params=params, timeout=3).json()
-        if res.get('documents'):
-            match = res['documents'][0]
-            return float(match['y']), float(match['x']), match['address_name']
+        res = requests.get(url, headers=headers, params=params, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            if data.get('documents'):
+                match = data['documents'][0]
+                return float(match['y']), float(match['x']), match['address_name']
         return None, None, None
     except: return None, None, None
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_osrm_route(p1_lat, p1_lon, p2_lat, p2_lon):
-    url = f"http://router.project-osrm.org/route/v1/driving/{p1_lon},{p1_lat};{p2_lon},{p2_lat}?overview=full&geometries=geojson"
+@st.cache_data(ttl=300, show_spinner=False)
+def get_kakao_traffic_routes(p1_lat, p1_lon, p2_lat, p2_lon):
+    url = "https://apis-navi.kakaomobility.com/v1/directions"
+    headers = {"Authorization": f"KakaoAK {KAKAO_API_KEY}"}
+    params = {"origin": f"{p1_lon},{p1_lat}", "destination": f"{p2_lon},{p2_lat}", "priority": "RECOMMEND", "alternatives": "true"}
     try:
-        res = requests.get(url, timeout=3).json()
-        if res.get('routes'):
-            route = res['routes'][0]
-            return route['distance']/1000, route['duration']/60, [[p[1], p[0]] for p in route['geometry']['coordinates']]
+        res = requests.get(url, headers=headers, params=params, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            if data.get('routes'):
+                all_paths = []
+                for idx, route in enumerate(data['routes']):
+                    summary = route['summary']
+                    traffic_segments = []
+                    for section in route['sections']:
+                        for road in section['roads']:
+                            state = road.get('traffic_state', 1)
+                            color = "#2ecc71" if state == 1 else "#f1c40f" if state <= 2 else "#e67e22" if state == 3 else "#e74c3c"
+                            vertexes = road['vertexes']
+                            path = [[vertexes[i+1], vertexes[i]] for i in range(0, len(vertexes), 2)]
+                            traffic_segments.append({"path": path, "color": color})
+                    all_paths.append({"name": f"경로 {idx+1} ({'최적' if idx==0 else '대안'})", "dist": summary['distance'] / 1000, "time": summary['duration'] / 60, "segments": traffic_segments})
+                return all_paths
     except: pass
+    
+    # 💡 [버그 1 수정] API 실패 시 지시서 끊김 방지용 직선 경로 강제 반환
     d = math.dist((p1_lat, p1_lon), (p2_lat, p2_lon)) * 111
-    return d, (d/25)*60, [[p1_lat, p1_lon], [p2_lat, p2_lon]]
+    return [{"name": "직선 경로 (API 응답 지연)", "dist": d, "time": (d/25)*60, "segments": [{"path": [[p1_lat, p1_lon], [p2_lat, p2_lon]], "color": "#808080"}]}]
 
 # --- 4. 세션 상태 관리 ---
-if 'db_data' not in st.session_state: st.session_state.db_data = db.load_all()
+if 'db_data' not in st.session_state: st.session_state.db_data = db.load_all_locations()
 if 'targets' not in st.session_state: st.session_state.targets = []
 if 'opt_result' not in st.session_state: st.session_state.opt_result = None
 
-def refresh_db(): st.session_state.db_data = db.load_all()
+def refresh_db(): st.session_state.db_data = db.load_all_locations()
 
 # --- 5. 사이드바: 관제 패널 ---
 with st.sidebar:
-    st.title("🛰️ LogiTrack Pro v17.0")
+    st.title("🛰️ LogiTrack Pro v22.1")
     
     with st.expander("🏢 1. 거점 마스터 관리", expanded=False):
         n_name = st.text_input("지점 명칭", placeholder="예: 서울센터")
         n_addr = st.text_input("도로명 주소", placeholder="예: 세종대로 110")
         if st.button("💾 DB 영구 저장", use_container_width=True):
             if n_name and n_addr:
-                with st.spinner('카카오 지도로 정밀 변환 중...'):
-                    lat, lon, f_addr = get_kakao_coordinate(n_addr)
-                    if lat and db.insert(n_name, lat, lon, f_addr):
-                        refresh_db(); st.toast(f"'{n_name}' 등록 완료", icon="✅")
-                        import time; time.sleep(0.5); st.rerun()
-                    else: st.error("주소 검색 실패 또는 중복 명칭")
-        
-        if st.session_state.db_data:
-            st.divider()
-            del_target = st.selectbox("삭제할 거점", [d['name'] for d in st.session_state.db_data])
-            if st.button("영구 삭제", type="primary"):
-                db.delete(del_target); refresh_db(); st.rerun()
+                lat, lon, f_addr = get_kakao_coordinate(n_addr)
+                if lat and db.insert_location(n_name, lat, lon, f_addr):
+                    refresh_db(); st.toast(f"'{n_name}' 등록 완료 (실제 주소: {f_addr})"); st.rerun()
 
-    st.subheader("🚚 2. 배차 시나리오 & 적재 설정")
-    truck_cap = st.number_input("🚛 차량 최대 적재량 (Box)", min_value=10, value=100, step=10)
+    st.subheader("🚚 2. 배차 시나리오 설정")
+    truck_cap = st.number_input("🚛 차량 적재량 (Box)", min_value=10, value=100)
     
     if st.session_state.db_data:
         all_names = [d['name'] for d in st.session_state.db_data]
         start_node = st.selectbox("🚩 출발 허브", all_names)
         
-        st.divider()
-        sel_targets = st.multiselect("📍 배송처 추가", all_names)
-        col1, col2 = st.columns(2)
-        with col1: prio = st.radio("우선순위", [1, 2, 3], format_func=lambda x:{1:"긴급", 2:"보통", 3:"여유"}[x])
-        with col2: demand = st.number_input("물량(Box)", min_value=1, value=20)
+        added_names = [t['name'] for t in st.session_state.targets]
+        available_targets = [n for n in all_names if n not in added_names and n != start_node]
         
-        if st.button("➕ 리스트에 추가", use_container_width=True):
-            for t in sel_targets:
-                if not any(d['name'] == t for d in st.session_state.targets):
-                    item = next(i for i in st.session_state.db_data if i['name'] == t)
-                    st.session_state.targets.append({**item, "priority": prio, "demand": demand})
+        # 💡 [버그 2 수정] 다중 선택(multiselect)을 단일 선택(selectbox)으로 변경
+        if available_targets:
+            sel_target = st.selectbox("📍 배송처 선택 (한 개씩 추가)", available_targets)
+            col1, col2 = st.columns(2)
+            with col1: prio = st.radio("우선순위", [1, 2, 3], format_func=lambda x:{1:"긴급", 2:"보통", 3:"여유"}[x])
+            with col2: demand = st.number_input("물량(Box)", min_value=1, value=20)
+            
+            if st.button("➕ 리스트에 추가", use_container_width=True) and sel_target:
+                item = next(i for i in st.session_state.db_data if i['name'] == sel_target)
+                st.session_state.targets.append({**item, "priority": prio, "demand": demand})
+                st.rerun()
+        else:
+            st.info("현재 선택 가능한 배송처가 없습니다.")
+
+    if st.session_state.targets:
+        del_target = st.selectbox("리스트에서 제거", [t['name'] for t in st.session_state.targets])
+        if st.button("배송지 제외", type="primary", use_container_width=True):
+            st.session_state.targets = [t for t in st.session_state.targets if t['name'] != del_target]
             st.rerun()
 
-    st.button("🔄 배차 초기화", on_click=lambda: st.session_state.update({"targets":[], "opt_result":None}), use_container_width=True)
+    st.divider()
+    st.subheader("📂 3. 시나리오 보관함")
+    
+    with st.expander("💾 현재 결과 저장하기", expanded=False):
+        s_save_name = st.text_input("시나리오 명칭", placeholder="예: 월요 배송 A코스")
+        if st.button("시나리오 DB 저장", use_container_width=True):
+            if s_save_name and st.session_state.opt_result:
+                if db.save_scenario(s_save_name, st.session_state.targets, st.session_state.opt_result):
+                    st.toast("시나리오가 저장되었습니다. ✅")
+                else: st.error("저장 실패")
+            else: st.warning("저장할 결과가 없습니다.")
 
-# --- 6. 메인 로직: CVRP 알고리즘 ---
-st.title("🚚 지능형 용량 제약 배차 대시보드")
+    saved_scenarios = db.load_scenarios()
+    if saved_scenarios:
+        s_list = [s['s_name'] for s in saved_scenarios]
+        selected_s = st.selectbox("불러올 시나리오", s_list)
+        col_s1, col_s2 = st.columns(2)
+        with col_s1:
+            if st.button("📂 복구", use_container_width=True):
+                data = next(s for s in saved_scenarios if s['s_name'] == selected_s)
+                st.session_state.targets = json.loads(data['targets_data'])
+                st.session_state.opt_result = json.loads(data['result_data'])
+                st.rerun()
+        with col_s2:
+            if st.button("🗑️ 삭제", use_container_width=True):
+                db.delete_scenario(selected_s)
+                st.rerun()
 
-if st.button("🚀 AI 경로 최적화 시뮬레이션 가동", type="primary", use_container_width=True):
+# --- 6. 메인 로직 ---
+st.title("🚚 지능형 배차 관제 및 시나리오 매니저")
+
+if st.button("🚀 실시간 교통 분석 및 최적 경로 산출", type="primary", use_container_width=True):
     if not st.session_state.targets:
-        st.error("배송지를 추가해주세요.")
+        st.error("배송지를 먼저 추가해주세요.")
     else:
-        with st.spinner('적재 제약을 고려한 최적 경로 산출 중...'):
+        with st.spinner('카카오 내비 실시간 정체 구간 분석 중...'):
             start_info = next(i for i in st.session_state.db_data if i['name'] == start_node)
             unvisited = st.session_state.targets.copy()
-            route, t_dist, t_time, t_geo, report = [start_info], 0, 0, [], []
+            final_route, report, total_dist, total_time, main_segments, all_alternatives = [start_info], [], 0, 0, [], []
             curr_time = datetime.now().replace(hour=9, minute=0, second=0)
             current_load, trip_count = 0, 1
 
             while unvisited:
-                curr = route[-1]
-                # 가중치 알고리즘 (Priority^1.4)
+                curr = final_route[-1]
                 next_n = min(unvisited, key=lambda x: math.dist((curr['lat'], curr['lon']), (x['lat'], x['lon'])) * (x['priority']**1.4))
+                is_reloading = (current_load + next_n['demand'] > truck_cap)
+                dest = start_info if is_reloading else next_n
                 
-                # 용량 초과 시 센터 복귀 (Reload)
-                if current_load + next_n['demand'] > truck_cap:
-                    d_back, t_back, geo_back = get_osrm_route(curr['lat'], curr['lon'], start_info['lat'], start_info['lon'])
-                    report.append({"구분": f"T{trip_count}", "거점": "🔄 허브 복귀(재적재)", "도착": (curr_time + timedelta(minutes=t_back)).strftime("%H:%M"), "구간(km)": f"{d_back:.2f}", "적재": "0/0"})
-                    t_dist += d_back; t_time += t_back + 30; t_geo.extend(geo_back)
-                    route.append(start_info); curr_time += timedelta(minutes=t_back + 30); current_load = 0; trip_count += 1
-                    continue
+                routes = get_kakao_traffic_routes(curr['lat'], curr['lon'], dest['lat'], dest['lon'])
+                best = routes[0]
                 
-                d, t, geo = get_osrm_route(curr['lat'], curr['lon'], next_n['lat'], next_n['lon'])
-                arr_t = curr_time + timedelta(minutes=t)
-                current_load += next_n['demand']
-                report.append({"구분": f"T{trip_count}", "거점": next_n['name'], "도착": arr_t.strftime("%H:%M"), "구간(km)": f"{d:.2f}", "적재": f"{current_load}/{truck_cap}"})
-                t_dist += d; t_time += t + 15; t_geo.extend(geo); route.append(next_n); unvisited.remove(next_n)
-                curr_time = arr_t + timedelta(minutes=15)
+                total_dist += best['dist']; total_time += best['time'] + (30 if is_reloading else 15)
+                main_segments.extend(best['segments']); all_alternatives.append(routes)
+                
+                if is_reloading:
+                    report.append({"구분": f"T{trip_count}", "거점": "🔄 허브 복귀(재적재)", "도착": (curr_time + timedelta(minutes=best['time'])).strftime("%H:%M"), "구간(km)": f"{best['dist']:.2f}", "적재": "0/0"})
+                    final_route.append(start_info); curr_time += timedelta(minutes=best['time'] + 30); current_load = 0; trip_count += 1
+                else:
+                    current_load += next_n['demand']
+                    report.append({"구분": f"T{trip_count}", "거점": next_n['name'], "도착": (curr_time + timedelta(minutes=best['time'])).strftime("%H:%M"), "구간(km)": f"{best['dist']:.2f}", "적재": f"{current_load}/{truck_cap}"})
+                    final_route.append(next_n); unvisited.remove(next_n); curr_time += timedelta(minutes=best['time'] + 15)
             
-            # 최종 복귀
-            d_last, t_last, geo_last = get_osrm_route(route[-1]['lat'], route[-1]['lon'], start_info['lat'], start_info['lon'])
-            t_dist += d_last; t_time += t_last; t_geo.extend(geo_last); route.append(start_info)
-            report.append({"구분": "종료", "거점": "🏁 허브 복귀", "도착": (curr_time + timedelta(minutes=t_last)).strftime("%H:%M"), "구간(km)": f"{d_last:.2f}", "적재": "-"})
+            last_routes = get_kakao_traffic_routes(final_route[-1]['lat'], final_route[-1]['lon'], start_info['lat'], start_info['lon'])
+            if last_routes:
+                total_dist += last_routes[0]['dist']; total_time += last_routes[0]['time']
+                main_segments.extend(last_routes[0]['segments'])
+                report.append({"구분": "종료", "거점": "🏁 허브 복귀", "도착": (curr_time + timedelta(minutes=last_routes[0]['time'])).strftime("%H:%M"), "구간(km)": f"{last_routes[0]['dist']:.2f}", "적재": "-"})
 
-            st.session_state.opt_result = {"route": route, "dist": t_dist, "time": t_time, "geo": t_geo, "report": report, "trips": trip_count}
+            st.session_state.opt_result = {"route": final_route, "report": report, "dist": total_dist, "time": total_time, "segments": main_segments, "trips": trip_count, "alternatives": all_alternatives}
             st.rerun()
 
 # --- 7. 결과 대시보드 ---
@@ -175,30 +247,40 @@ m3.metric("필요 차량 (회차)", f"{res['trips']} 회" if res else "-")
 m4.metric("총 배송 물량", f"{sum(t['demand'] for t in st.session_state.targets)} Box")
 
 st.divider()
+
+if res:
+    st.subheader("📊 실시간 교통 분석 및 다중 경로 비교")
+    comparison_data = [{"경로 종류": r['name'], "총 거리": f"{r['dist']:.2f} km", "소요 시간": f"{int(r['time'])}분", "상태": "추천 최적" if "최적" in r['name'] else "우회 경로"} for r in res['alternatives'][0]]
+    st.table(pd.DataFrame(comparison_data))
+
 col_l, col_r = st.columns([1.1, 2])
 
 with col_l:
-    st.subheader("📋 배송 현황")
-    if st.session_state.targets:
-        st.dataframe(pd.DataFrame(st.session_state.targets)[['name', 'priority', 'demand']], use_container_width=True, hide_index=True)
-    if res:
-        st.markdown("---")
-        st.subheader("📝 운행 지시서")
+    st.subheader("📝 운행 지시서")
+    if res and res['report']: 
         st.table(pd.DataFrame(res['report']))
+    else: 
+        st.info("데이터를 입력하거나 보관함에서 시나리오를 불러오세요.")
 
 with col_r:
-    st.subheader("🗺️ 경로 최적화 맵")
-    # 지도 중심 설정
-    if st.session_state.db_data:
-        hub = next((i for i in st.session_state.db_data if i['name'] == (start_node if 'start_node' in locals() else st.session_state.db_data[0]['name'])), st.session_state.db_data[0])
-        c_loc = [hub['lat'], hub['lon']]
-    else: c_loc = [37.5665, 126.9780]
-
+    st.subheader("🗺️ 실시간 교통 상황 맵")
+    hub = next((i for i in st.session_state.db_data if i['name'] == (start_node if 'start_node' in locals() else st.session_state.db_data[0]['name'])), st.session_state.db_data[0]) if st.session_state.db_data else None
+    c_loc = [hub['lat'], hub['lon']] if hub else [37.5665, 126.9780]
     m = folium.Map(location=c_loc, zoom_start=12, tiles="cartodbpositron")
+    
     if res:
-        plugins.AntPath(locations=res['geo'], delay=1200, color="#004aad", weight=6).add_to(m)
+        # 💡 [버그 3 수정] 전체 경로가 지도 화면에 딱 맞게 들어오도록 자동 줌인(Auto Bounds) 설정
+        if res['route']:
+            lats = [loc['lat'] for loc in res['route']]
+            lons = [loc['lon'] for loc in res['route']]
+            m.fit_bounds([[min(lats), min(lons)], [max(lats), max(lons)]])
+
+        for seg in res['segments']: 
+            folium.PolyLine(locations=seg['path'], color=seg['color'], weight=6, opacity=0.8).add_to(m)
+        plugins.AntPath(locations=[p for seg in res['segments'] for p in seg['path']], delay=1500, color="white", weight=2, opacity=0.5).add_to(m)
         for i, loc in enumerate(res['route']):
-            icon_color = "black" if loc['name'] == hub['name'] else "#004aad"
+            icon_color = "black" if loc['name'] == hub['name'] else "#4dabf7"
             label = "H" if loc['name'] == hub['name'] else str(i)
-            folium.Marker([loc["lat"], loc["lon"]], tooltip=loc['name'], icon=folium.DivIcon(html=f"""<div style="background:{icon_color}; border:2px solid white; border-radius:50%; color:white; font-weight:bold; width:30px; height:30px; line-height:26px; text-align:center;">{label}</div>""")).add_to(m)
-    st_folium(m, width="100%", height=500, key="final_map")
+            folium.Marker([loc["lat"], loc["lon"]], tooltip=f"{loc['name']} ({loc['addr']})", icon=folium.DivIcon(html=f"""<div style="background:{icon_color}; border:2px solid white; border-radius:50%; color:white; font-weight:bold; width:28px; height:28px; line-height:24px; text-align:center; font-size:10pt;">{label}</div>""")).add_to(m)
+            
+    st_folium(m, width="100%", height=550, key="final_map")
