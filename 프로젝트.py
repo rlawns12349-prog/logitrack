@@ -499,13 +499,8 @@ def _render_result_page():
 # ══════════════════════════════════════════════
 render_sidebar(db, KAKAO_API_KEY)
 
-st.title("🚚 LogiTrack Pro V18 — Ultimate SCM Engine")
-st.caption(
-    "V18+R+P: hub안전처리 | 음수클리핑 | uuid매핑 | 맵트럭매칭 | purge캐싱 | "
-    "DB타임아웃+CM | TW옵션보장 | 변경후초기화 | 복귀행필터 | 키마스킹 | "
-    "모듈화 | 함수순서(P-1) | DB조회최적화(P-2) | 429재시도(P-3) | "
-    "lambda클로저(P-4) | cont_min정수비교(P-5)"
-)
+st.title("🚚 LogiTrack — 배차 최적화 시스템")
+st.caption("실측 경로 기반 VRPTW 배차 최적화 | 운송비 자동 산출 | 실시간 관제 맵")
 
 if not st.session_state.opt_result:
     _render_queue_page()
