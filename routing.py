@@ -24,7 +24,6 @@ def get_kakao_coordinate(address: str, kakao_key: str):
         ]:
             res = requests.get(url, headers=headers, params={"query": address}, timeout=5)
             if res.status_code == 200:
-                # R-1: json() 한 번만 호출해 역직렬화 중복 방지
                 body = res.json()
                 if body.get('documents'):
                     d = body['documents'][0]
@@ -67,19 +66,18 @@ async def fetch_route_core(
         "destination": f"{dest['lon']},{dest['lat']}",
         "priority":    "RECOMMEND",
     }
+    # 타임아웃을 태스크 외부에서 생성하지 않고 숫자로 직접 전달 (Timeout context manager 에러 수정)
     for attempt in range(3):
         try:
             async with session.get(
                 "https://apis-navi.kakaomobility.com/v1/directions",
                 headers={"Authorization": f"KakaoAK {kakao_key}"},
                 params=params,
-                timeout=aiohttp.ClientTimeout(total=5),
+                timeout=aiohttp.ClientTimeout(total=5, ceil_threshold=5),
             ) as res:
                 if res.status == 200:
-                    # R-1: json() 한 번만 호출해 역직렬화 중복 방지
                     data = await res.json()
                     routes = data.get('routes', [])
-                    # R-2: 200이지만 routes 빈 배열인 경우(경로 없음) → 폴백으로 진행
                     if routes:
                         r       = routes[0]
                         path_yx = []
@@ -101,16 +99,13 @@ async def fetch_route_core(
                         result = cd.copy()
                         result['time'] = raw_t * weather_factor
                         return result
-                    # routes 빈 배열 → 폴백으로 진행 (break 후 Manhattan 추정)
                     break
                 elif res.status == 429:
-                    # P-3 fix: async with 블록 밖에서 sleep 후 다음 attempt로
                     pass
                 else:
-                    break  # 4xx/5xx는 재시도 불필요
+                    break
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             logger.warning("fetch_route attempt %d: %s", attempt, e)
-        # 429 또는 타임아웃 시 backoff 후 재시도
         await asyncio.sleep(1.5 ** attempt)
 
     # 4) 폴백: Manhattan 추정
@@ -144,7 +139,6 @@ async def build_real_time_matrix(
     real_dist_matrix   = [[0.0] * size for _ in range(size)]
     real_toll_matrix   = [[0]   * size for _ in range(size)]
 
-    # 서비스 시간 계산
     for j, node in enumerate(nodes):
         if j == 0:
             continue
@@ -162,7 +156,6 @@ async def build_real_time_matrix(
         tw = node.get('tw_start', 0)
         return 1.3 if ((-120 <= tw <= 0) or (480 <= tw <= 600)) else 1.0
 
-    # R-3: pairs와 indices를 별도 리스트 대신 zip으로 묶어 메모리·가독성 개선
     pair_index_list = [
         ((i, j), (nodes[i], nodes[j]))
         for i in range(size)
@@ -171,7 +164,10 @@ async def build_real_time_matrix(
     ]
 
     results = []
-    async with aiohttp.ClientSession() as sess:
+    # 커넥터 타임아웃도 ceil_threshold 적용
+    connector = aiohttp.TCPConnector()
+    timeout   = aiohttp.ClientTimeout(total=10, ceil_threshold=5)
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as sess:
         all_pairs = [p for _, p in pair_index_list]
         for i in range(0, len(all_pairs), 15):
             chunk   = all_pairs[i:i + 15]
