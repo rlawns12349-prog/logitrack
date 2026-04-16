@@ -156,7 +156,16 @@ def run_optimization(hub_name: str):
             weather_f = (0.7 if "눈" in st.session_state.cfg_weather
                          else 0.8 if "비" in st.session_state.cfg_weather else 1.0)
 
-            loop = asyncio.get_event_loop()
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_closed():
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    nest_asyncio.apply(loop)
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                nest_asyncio.apply(loop)
             combined, travel_tm, svc_list, dist_m, toll_m = loop.run_until_complete(
                 build_real_time_matrix(
                     nodes_data,
