@@ -243,6 +243,12 @@ def _render_csv_upload(db, kakao_key: str):
         "송파센터,서울특별시 송파구 올림픽로 300,배송지,600,3.0,냉동,지게차,일반,여유,유동,13:00~18:00,오후 배송"
     )
     with st.expander("📥 CSV 일괄 업로드"):
+        st.info(
+            "**사용 방법**\n\n"
+            "1. 아래 **템플릿 다운로드** 버튼을 눌러 CSV 파일을 받으세요.\n"
+            "2. 엑셀 또는 메모장에서 내용을 채운 뒤 저장하세요.\n"
+            "3. **Upload** 버튼으로 파일을 업로드하면 자동으로 배차 대기열에 등록됩니다."
+        )
         st.download_button(
             "📄 템플릿 다운로드", data=template.encode('utf-8-sig'),
             file_name="배차계획_템플릿.csv", mime="text/csv", use_container_width=True,
