@@ -36,7 +36,6 @@ def render_sidebar(db, kakao_key: str):
         st.title("🛰️ LogiTrack Pro V18")
         st.caption("Production Grade — B+R Series Fixes")
 
-        _render_settings()
         st.divider()
         _render_scenario_panel(db)
         st.divider()
@@ -45,87 +44,6 @@ def render_sidebar(db, kakao_key: str):
         st.divider()
         _render_location_delete(db)
         _render_target_queue(db)
-
-
-# ── 설정 패널 ─────────────────────────────────────
-def _render_settings():
-    _speeds  = [20, 30, 40, 45, 50, 60, 70, 80, 90, 100]
-    _svcs    = [5, 10, 15, 20, 30, 45, 60]
-    _fuels   = [1000, 1200, 1500, 1800, 2000, 2500, 3000]
-    _labors  = [10000, 12000, 15000, 18000, 20000, 25000, 30000]
-    _vrptws  = [1, 2, 3, 5, 8, 10, 15, 20, 30]
-    _weather = ["맑음", "비 (감속 20%)", "눈 (감속 30%)"]
-
-    def _idx(lst, val, d): return lst.index(val) if val in lst else d
-
-    with st.expander("⚙️ 시뮬레이션 환경 설정", expanded=False):
-        c_start   = st.time_input("⏰ 출발 시간",
-                                   value=datetime.strptime(st.session_state.cfg_start_time, "%H:%M"))
-        c_weather = st.selectbox("☁️ 기상", _weather,
-                                  index=_idx(_weather, st.session_state.cfg_weather, 0))
-        c_speed   = st.selectbox("💨 기준 시속(km/h)", _speeds,
-                                  index=_idx(_speeds, st.session_state.cfg_speed, 3))
-        c_congest = st.slider("🚦 혼잡 페널티(%)", 0, 80, st.session_state.cfg_congestion)
-
-        st.markdown("**하차 시간**")
-        colS1, colS2 = st.columns(2)
-        c_svc   = colS1.selectbox("기본(분)", _svcs,
-                                   index=_idx(_svcs, st.session_state.cfg_service, 1))
-        c_seckg = colS2.number_input("kg당 추가초", min_value=0,
-                                      value=st.session_state.cfg_service_sec_per_kg, step=1)
-
-        st.markdown("**🚛 차량 구성**")
-        colV1, colV2, colV3 = st.columns(3)
-        c_1t = colV1.number_input("1톤(냉탑)", min_value=0, max_value=15,
-                                   value=st.session_state.cfg_1t_cnt)
-        c_2t = colV2.number_input("2.5톤",     min_value=0, max_value=15,
-                                   value=st.session_state.cfg_2t_cnt)
-        c_5t = colV3.number_input("5톤",        min_value=0, max_value=15,
-                                   value=st.session_state.cfg_5t_cnt)
-
-        with st.expander("🎖️ 기사 스킬 설정"):
-            skill_opts = ["베테랑 (×0.8)", "일반 (×1.0)", "초보 (×1.2)"]
-            skill_map  = {"베테랑 (×0.8)": 0.8, "일반 (×1.0)": 1.0, "초보 (×1.2)": 1.2}
-            v1s, v2s, v5s = [], [], []
-            for i in range(c_1t):
-                v1s.append(skill_map[st.selectbox(f"1톤 #{i+1}", skill_opts, index=1, key=f"v1_{i}")])
-            for i in range(c_2t):
-                v2s.append(skill_map[st.selectbox(f"2.5톤 #{i+1}", skill_opts, index=1, key=f"v2_{i}")])
-            for i in range(c_5t):
-                v5s.append(skill_map[st.selectbox(f"5톤 #{i+1}", skill_opts, index=1, key=f"v5_{i}")])
-            st.session_state.cfg_v1_skills = v1s
-            st.session_state.cfg_v2_skills = v2s
-            st.session_state.cfg_v5_skills = v5s
-
-        st.markdown("**⚖️ 노무·안전**")
-        c_hrs   = st.number_input("최대 운행(시간)", min_value=4, max_value=16,
-                                   value=st.session_state.cfg_max_hours)
-        c_bal   = st.toggle("업무량 균등 분배", value=st.session_state.cfg_balance)
-        c_vrptw = st.selectbox("최적화 시간(초)", _vrptws,
-                                index=_idx(_vrptws, st.session_state.cfg_vrptw_sec, 3))
-
-        with st.expander("💸 비용 설정"):
-            c_fuel  = st.selectbox("경유 단가(원/L)", _fuels,
-                                    index=_idx(_fuels,  st.session_state.cfg_fuel_price, 2))
-            c_labor = st.selectbox("인건비(원/시)",   _labors,
-                                    index=_idx(_labors, st.session_state.cfg_labor, 2))
-
-        st.session_state.update({
-            'cfg_start_time':        c_start.strftime("%H:%M"),
-            'cfg_weather':           c_weather,
-            'cfg_speed':             c_speed,
-            'cfg_service':           c_svc,
-            'cfg_service_sec_per_kg': c_seckg,
-            'cfg_congestion':        c_congest,
-            'cfg_1t_cnt':            c_1t,
-            'cfg_2t_cnt':            c_2t,
-            'cfg_5t_cnt':            c_5t,
-            'cfg_max_hours':         c_hrs,
-            'cfg_balance':           c_bal,
-            'cfg_fuel_price':        c_fuel,
-            'cfg_labor':             c_labor,
-            'cfg_vrptw_sec':         c_vrptw,
-        })
 
 
 # ── 시나리오 패널 ─────────────────────────────────
