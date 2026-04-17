@@ -226,17 +226,26 @@ def _render_location_panel(db, kakao_key: str):
 # ── CSV 업로드 패널 ───────────────────────────────
 def _render_csv_upload(db, kakao_key: str):
     template = (
-        "[설정]\n출발시간,09:00\n기상상황,맑음\n1톤트럭수,2\n2.5톤트럭수,1\n5톤트럭수,0\n"
-        "평균시속kmh,45\n교통혼잡도%,40\n기본하차시간분,10\nkg당추가초,2\n최대근로시간,10\n"
-        "업무균등화,0\n경유단가원per L,1500\n인건비원per시,15000\n최적화시간,5\n[거점]\n"
-        "지점명,주소,허브(O/X),무게kg,부피CBM,온도,하차방식,난이도,우선순위,제약유형,시간약속,메모\n"
-        "서울허브,서울특별시 중구 세종대로 110,O,0,0,상온,지게차,일반 (+0분),일반,Hard,00:00~23:59,출발기지\n"
-        "강남센터,서울특별시 강남구 테헤란로 152,X,450,2.1,냉장,수작업,보안아파트 (+10분),VIP,Hard,09:00~13:00,오전배송"
+        "[설정]\n항목,값,설명\n"
+        "출발시간,09:00,HH:MM 형식으로 입력\n"
+        "기상상황,맑음,맑음 / 비 / 눈 중 선택\n"
+        "1톤트럭수,2,운행할 1톤 트럭 대수\n"
+        "2.5톤트럭수,1,운행할 2.5톤 트럭 대수\n"
+        "5톤트럭수,0,운행할 5톤 트럭 대수\n"
+        "최대근로시간(시간),10,기사 1인 최대 근무 시간\n"
+        "경유단가(원/L),1500,현재 경유 단가\n"
+        "인건비(원/시간),15000,기사 시간당 인건비\n"
+        "[거점]\n"
+        "지점명,주소,허브여부,무게(kg),부피(CBM),온도관리,하차방식,진입난이도,우선순위,시간제약유형,배송가능시간,메모\n"
+        "서울허브,서울특별시 중구 세종대로 110,허브,0,0,상온,지게차,일반,일반,고정,00:00~23:59,출발 거점\n"
+        "강남센터,서울특별시 강남구 테헤란로 152,배송지,450,2.1,냉장,수작업,보안아파트,VIP,고정,09:00~13:00,오전 배송 필수\n"
+        "마포물류,서울특별시 마포구 월드컵북로 400,배송지,300,1.5,상온,수작업,일반,일반,유동,09:00~18:00,\n"
+        "송파센터,서울특별시 송파구 올림픽로 300,배송지,600,3.0,냉동,지게차,일반,여유,유동,13:00~18:00,오후 배송"
     )
     with st.expander("📥 CSV 일괄 업로드"):
         st.download_button(
             "📄 템플릿 다운로드", data=template.encode('utf-8-sig'),
-            file_name="배차계획_V18_템플릿.csv", mime="text/csv", use_container_width=True,
+            file_name="배차계획_템플릿.csv", mime="text/csv", use_container_width=True,
         )
         uploaded = st.file_uploader("CSV 업로드", type=["csv"], label_visibility="collapsed")
         if uploaded is None:
@@ -323,17 +332,17 @@ def _process_csv(raw: bytes, file_id: str, db, kakao_key: str):
     def fc(kws):
         return next((h for h in headers_row if any(k in h for k in kws)), None)
 
-    name_col    = fc(['지점', 'name'])    or headers_row[0]
-    addr_col    = fc(['주소', 'addr'])    or headers_row[1]
+    name_col    = fc(['지점', 'name'])                      or headers_row[0]
+    addr_col    = fc(['주소', 'addr'])                      or headers_row[1]
     hub_col     = fc(['허브', 'hub'])
     wt_col      = fc(['무게', 'kg', 'weight'])
     vol_col     = fc(['부피', 'CBM', 'volume'])
     temp_col    = fc(['온도', 'temp', '냉장'])
     method_col  = fc(['하차방식', '지게차', '수작업'])
-    diff_col    = fc(['난이도', 'difficulty', '유형'])
+    diff_col    = fc(['난이도', '진입', 'difficulty'])
     pri_col     = fc(['우선순위', 'priority'])
-    twtype_col  = fc(['제약유형', 'Hard', 'Soft'])
-    tw_col      = fc(['시간', 'tw', 'time'])
+    twtype_col  = fc(['시간제약', '제약유형', 'Hard', 'Soft'])
+    tw_col      = fc(['배송가능시간', '시간약속', 'tw', 'time'])
     memo_col    = fc(['메모', 'memo', 'note'])
 
     name_i  = headers_row.index(name_col)
@@ -417,7 +426,7 @@ def _process_csv(raw: bytes, file_id: str, db, kakao_key: str):
             except (ValueError, IndexError):
                 return ""
 
-        is_hub = _gc(hub_col).upper() in ('O', 'Y', '1', '허브')
+        is_hub = _gc(hub_col).upper() in ('O', 'Y', '1', '허브', '허브여부')
         if is_hub:
             hub_name = name
         else:
@@ -431,9 +440,12 @@ def _process_csv(raw: bytes, file_id: str, db, kakao_key: str):
                 vol = 0.5
             tmp = _gc(temp_col)   or "상온"
             mth = _gc(method_col) or "수작업"
-            dif = _gc(diff_col)   or "일반 (+0분)"
+            dif = _gc(diff_col) or "일반 (+0분)"
+            dif_map = {"보안아파트": "보안아파트 (+10분)", "재래시장": "재래시장 (+15분)", "일반": "일반 (+0분)"}
+            dif = dif_map.get(dif, dif)
             pri = _gc(pri_col)    or "일반"
             twt = _gc(twtype_col) or "Hard"
+            twt = "Hard" if twt in ("Hard", "고정") else "Soft"
             twr = _gc(tw_col)
             twd = twr if '~' in twr else "09:00~18:00"
             mem = _gc(memo_col)
