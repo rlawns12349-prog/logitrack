@@ -6,7 +6,6 @@ import logging
 from datetime import datetime
 
 import pandas as pd
-import requests
 import streamlit as st
 
 from solver import compute_truck_financials
@@ -46,8 +45,8 @@ def render_dashboard(res: dict):
 
     # ── 탭 ───────────────────────────────────────
     tstats = res.get("truck_stats", {})
-    tab_sum, tab_util, tab_esg, tab_lifo, tab_cost, tab_ai = st.tabs([
-        "🚛 운행 요약", "📦 적재율", "🌱 탄소 배출", "📋 상차 순서", "💰 비용 명세", "🤖 AI 브리핑",
+    tab_sum, tab_util, tab_esg, tab_lifo, tab_cost = st.tabs([
+        "🚛 운행 요약", "📦 적재율", "🌱 탄소 배출", "📋 상차 순서", "💰 비용 명세",
     ])
 
     with tab_sum:   _tab_summary(tstats)
@@ -55,7 +54,6 @@ def render_dashboard(res: dict):
     with tab_esg:   _tab_esg(tstats)
     with tab_lifo:  _tab_lifo(tstats)
     with tab_cost:  _tab_cost(res, tstats)
-    with tab_ai:    _tab_ai(res, tstats)
 
 
 # ── 운행 요약 ─────────────────────────────────────
@@ -153,102 +151,3 @@ def _tab_cost(res, tstats):
         "소계":   fw(res["total_cost"]),
     })
     st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
-
-
-# ── AI 브리핑 ─────────────────────────────────────
-def _tab_ai(res, tstats):
-    """Gemini API로 배차 결과 자동 브리핑 (버튼 클릭 한 번)"""
-
-    try:
-        api_key = st.secrets["GEMINI_API_KEY"]
-    except Exception:
-        import os
-        api_key = os.getenv("GEMINI_API_KEY", "")
-
-    payload = {
-        "date": datetime.now().strftime("%Y-%m-%d"),
-        "hub":  res["hub_name"],
-        "summary": {
-            "vehicles":       len(res["routes"]),
-            "total_cost":     int(res["total_cost"]),
-            "sla_pct":        res.get("sla", 100),
-            "co2_kg":         round(res.get("co2_total", 0), 1),
-            "dist_km":        round(res["dist"], 1),
-            "efficiency_pct": res.get("efficiency", 0),
-            "wait_min":       int(res.get("wait_time_total", 0)),
-        },
-        "unassigned": [
-            {"name": n["name"], "reason": n["reason"]}
-            for n in res.get("unassigned_diagnosed", [])
-        ],
-        "vehicles": {
-            k: {
-                "stops":        v["stops"],
-                "dist_km":      round(v["dist"], 1),
-                "co2_kg":       round(v["co2_kg"], 1),
-                "wt_util_pct":  round(v["used_wt"]  / v["max_wt"]  * 100, 1) if v["max_wt"]  > 0 else 0,
-                "vol_util_pct": round(v["used_vol"] / v["max_vol"] * 100, 1) if v["max_vol"] > 0 else 0,
-            }
-            for k, v in tstats.items()
-        },
-    }
-
-    # 세션에 캐시된 브리핑이 있으면 바로 표시
-    cached = st.session_state.get("_ai_briefing")
-    if cached:
-        st.success("✅ AI 브리핑이 생성되었습니다.")
-        st.markdown(cached)
-        st.divider()
-        col1, col2 = st.columns(2)
-        with col1:
-            st.download_button(
-                "⬇️ 브리핑 다운로드",
-                data=cached.encode("utf-8"),
-                file_name=f"배차브리핑_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
-                mime="text/plain",
-                use_container_width=True,
-            )
-        with col2:
-            if st.button("🔄 다시 생성", use_container_width=True):
-                del st.session_state["_ai_briefing"]
-                st.rerun()
-        return
-
-    st.caption("오늘 배차 결과를 Claude가 경영진 보고용으로 자동 요약합니다.")
-
-    if not api_key:
-        st.warning("GEMINI_API_KEY가 설정되지 않았습니다. Streamlit Secrets를 확인해주세요.")
-        return
-
-    if st.button("🤖 AI 브리핑 생성", type="primary", use_container_width=True):
-        prompt = (
-            f"다음 물류 배차 데이터를 보고 한국어로 경영진 보고용 일일 배차 브리핑을 작성해주세요.\n\n"
-            f"{json.dumps(payload, ensure_ascii=False, indent=2)}\n\n"
-            f"아래 5가지 항목으로 간결하게 작성하세요:\n"
-            f"① 전체 현황 요약\n"
-            f"② 성과 및 위험 요소\n"
-            f"③ 배차 불가 원인과 대안 (없으면 생략)\n"
-            f"④ ESG·탄소 배출 현황\n"
-            f"⑤ 내일 운영 권고사항"
-        )
-        with st.spinner("Gemini가 브리핑을 작성 중입니다..."):
-            try:
-                r = requests.post(
-                    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
-                    headers={
-                        "Content-Type": "application/json",
-                        "x-goog-api-key": api_key,
-                    },
-                    json={"contents": [{"parts": [{"text": prompt}]}]},
-                    timeout=30,
-                )
-                if r.status_code == 200:
-                    result = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-                    st.session_state["_ai_briefing"] = result
-                    st.rerun()
-                else:
-                    logger.warning("Gemini API %d: %s", r.status_code, r.text[:200])
-                    st.error(f"API 오류 ({r.status_code}). 잠시 후 다시 시도해주세요.")
-            except requests.RequestException as e:
-                logger.warning("Gemini API network error: %s", e)
-                st.error("네트워크 오류가 발생했습니다.")
