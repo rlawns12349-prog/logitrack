@@ -157,13 +157,13 @@ def _tab_cost(res, tstats):
 
 # ── AI 브리핑 ─────────────────────────────────────
 def _tab_ai(res, tstats):
-    """Claude API로 배차 결과 자동 브리핑 (버튼 클릭 한 번)"""
+    """Gemini API로 배차 결과 자동 브리핑 (버튼 클릭 한 번)"""
 
     try:
-        api_key = st.secrets["ANTHROPIC_API_KEY"]
+        api_key = st.secrets["GEMINI_API_KEY"]
     except Exception:
         import os
-        api_key = os.getenv("ANTHROPIC_API_KEY", "")
+        api_key = os.getenv("GEMINI_API_KEY", "")
 
     payload = {
         "date": datetime.now().strftime("%Y-%m-%d"),
@@ -217,7 +217,7 @@ def _tab_ai(res, tstats):
     st.caption("오늘 배차 결과를 Claude가 경영진 보고용으로 자동 요약합니다.")
 
     if not api_key:
-        st.warning("ANTHROPIC_API_KEY가 설정되지 않았습니다. Streamlit Secrets를 확인해주세요.")
+        st.warning("GEMINI_API_KEY가 설정되지 않았습니다. Streamlit Secrets를 확인해주세요.")
         return
 
     if st.button("🤖 AI 브리핑 생성", type="primary", use_container_width=True):
@@ -231,29 +231,24 @@ def _tab_ai(res, tstats):
             f"④ ESG·탄소 배출 현황\n"
             f"⑤ 내일 운영 권고사항"
         )
-        with st.spinner("Claude가 브리핑을 작성 중입니다..."):
+        with st.spinner("Gemini가 브리핑을 작성 중입니다..."):
             try:
                 r = requests.post(
-                    "https://api.anthropic.com/v1/messages",
+                    "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent",
                     headers={
-                        "x-api-key": api_key,
-                        "anthropic-version": "2023-06-01",
-                        "content-type": "application/json",
+                        "Content-Type": "application/json",
+                        "x-goog-api-key": api_key,
                     },
-                    json={
-                        "model": "claude-sonnet-4-6",
-                        "max_tokens": 2000,
-                        "messages": [{"role": "user", "content": prompt}],
-                    },
+                    json={"contents": [{"parts": [{"text": prompt}]}]},
                     timeout=30,
                 )
                 if r.status_code == 200:
-                    result = r.json()["content"][0]["text"]
+                    result = r.json()["candidates"][0]["content"]["parts"][0]["text"]
                     st.session_state["_ai_briefing"] = result
                     st.rerun()
                 else:
-                    logger.warning("Claude API %d: %s", r.status_code, r.text[:200])
+                    logger.warning("Gemini API %d: %s", r.status_code, r.text[:200])
                     st.error(f"API 오류 ({r.status_code}). 잠시 후 다시 시도해주세요.")
             except requests.RequestException as e:
-                logger.warning("Claude API network error: %s", e)
+                logger.warning("Gemini API network error: %s", e)
                 st.error("네트워크 오류가 발생했습니다.")
