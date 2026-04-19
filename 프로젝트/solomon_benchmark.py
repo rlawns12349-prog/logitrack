@@ -1,20 +1,37 @@
 """
-Solomon VRPTW Benchmark Validator for LogiTrack
-================================================
+solomon_benchmark.py — Solomon VRPTW Benchmark Validator
+
 Solomon(1987) 벤치마크로 OR-Tools VRPTW 솔버 품질 검증.
 
 검증 대상:
-  - C101 (군집형, 100고객): Hard time window 가능
-  - R101 (랜덤형, 100고객): 시간창 10분으로 타이트 → Soft TW로 검증
-  - RC101 (혼합형, 100고객): Soft TW로 검증
+  - C101 (군집형, 100고객, Hard TW)
+  - R101 (랜덤형, 25고객, Soft TW)
+  - RC101 (혼합형, 25고객, Soft TW)
 
-사용법: python solomon_benchmark.py
+개선 사항:
+  - 타입 힌팅 전면 적용
+  - 상수 분리 (_GAP_EXCELLENT, _GAP_ACCEPTABLE)
+  - solve() 반환 타입 명시
+  - main() 결과 출력 f-string 정리
+  - CSV 저장 경로 상수화
+
+사용법:
+    python solomon_benchmark.py
 """
+import csv
+import math
+import time
+from typing import Optional
 
-import math, time, csv
 from ortools.constraint_solver import routing_enums_pb2, pywrapcp
 
-# ── C101 노드 데이터 (100고객, vehicle_cap=200) ──────────────────────────
+# ── 벤치마크 품질 기준 ─────────────────────────────
+_GAP_EXCELLENT   = 5.0   # % 이하: 상용 솔루션 수준
+_GAP_ACCEPTABLE  = 15.0  # % 이하: 실용적 배차 수준
+_TIME_LIMIT_SEC  = 30
+_CSV_OUTPUT_PATH = "benchmark_result.csv"
+
+# ── C101 노드 데이터 (100고객, vehicle_cap=200) ──
 C101_NODES = [
     [0,40,50,0,0,1236,0],
     [1,45,68,10,912,967,90],[2,45,70,30,825,870,90],[3,42,66,10,65,146,90],
@@ -53,7 +70,7 @@ C101_NODES = [
     [100,28,80,10,169,224,90],
 ]
 
-# ── R101·RC101: 25고객 버전 사용 (시간창 문제로 Hard TW 해 존재 보장) ─────
+# ── R101·RC101: 25고객 버전 (Hard TW 해 존재 보장) ──
 R101_25 = [
     [0,35,35,0,0,230,0],
     [1,41,49,10,161,171,10],[2,35,17,10,50,60,10],[3,55,45,10,116,126,10],
@@ -80,43 +97,66 @@ RC101_25 = [
     [25,35,25,10,76,86,10],
 ]
 
-# ── 인스턴스 정의 ────────────────────────────────────────────────────────
-INSTANCES = {
+# ── 인스턴스 정의 ─────────────────────────────────
+INSTANCES: dict[str, dict] = {
     "C101 (100고객, Hard TW)": {
         "nodes": C101_NODES, "vehicle_capacity": 200, "max_vehicles": 25,
-        "bks_vehicles": 10, "bks_distance": 828.94, "soft_tw": False,
+        "bks_vehicles": 10,  "bks_distance": 828.94, "soft_tw": False,
     },
     "R101 (25고객, Soft TW)": {
-        "nodes": R101_25, "vehicle_capacity": 200, "max_vehicles": 25,
-        "bks_vehicles": 8, "bks_distance": 617.10, "soft_tw": True,
+        "nodes": R101_25,   "vehicle_capacity": 200, "max_vehicles": 25,
+        "bks_vehicles": 8,  "bks_distance": 617.10,  "soft_tw": True,
     },
     "RC101 (25고객, Soft TW)": {
-        "nodes": RC101_25, "vehicle_capacity": 200, "max_vehicles": 25,
-        "bks_vehicles": 4, "bks_distance": 461.11, "soft_tw": True,
+        "nodes": RC101_25,  "vehicle_capacity": 200, "max_vehicles": 25,
+        "bks_vehicles": 4,  "bks_distance": 461.11,  "soft_tw": True,
     },
 }
 
-def euclid(a, b):
-    return math.sqrt((a[1]-b[1])**2 + (a[2]-b[2])**2)
 
-def solve(inst, time_limit_sec=30):
-    nodes = inst["nodes"]
-    cap   = inst["vehicle_capacity"]
-    nveh  = inst["max_vehicles"]
-    soft  = inst["soft_tw"]
-    size  = len(nodes)
+def euclid(a: list, b: list) -> float:
+    """두 노드 간 유클리드 거리.
 
-    dist_m   = [[round(euclid(nodes[i], nodes[j])) for j in range(size)] for i in range(size)]
-    demands  = [n[3] for n in nodes]
-    ready    = [n[4] for n in nodes]
-    due      = [n[5] for n in nodes]
-    service  = [n[6] for n in nodes]
-    horizon  = max(due) + max(service) + 100
+    Args:
+        a: [id, x, y, ...] 형식의 노드
+        b: [id, x, y, ...] 형식의 노드
+
+    Returns:
+        유클리드 거리
+    """
+    return math.sqrt((a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2)
+
+
+def solve(
+    inst: dict,
+    time_limit_sec: int = _TIME_LIMIT_SEC,
+) -> tuple[Optional[float], Optional[int], float]:
+    """단일 Solomon 인스턴스 풀이.
+
+    Args:
+        inst:           INSTANCES 항목 dict
+        time_limit_sec: OR-Tools 탐색 제한 시간(초)
+
+    Returns:
+        (총 거리, 사용 차량 수, 경과 시간) — 해 없으면 (None, None, elapsed)
+    """
+    nodes   = inst["nodes"]
+    cap     = inst["vehicle_capacity"]
+    nveh    = inst["max_vehicles"]
+    soft    = inst["soft_tw"]
+    size    = len(nodes)
+
+    dist_m  = [[round(euclid(nodes[i], nodes[j])) for j in range(size)] for i in range(size)]
+    demands = [n[3] for n in nodes]
+    ready   = [n[4] for n in nodes]
+    due     = [n[5] for n in nodes]
+    service = [n[6] for n in nodes]
+    horizon = max(due) + max(service) + 100
 
     manager = pywrapcp.RoutingIndexManager(size, nveh, 0)
     routing = pywrapcp.RoutingModel(manager)
 
-    def time_cb(f, t):
+    def time_cb(f: int, t: int) -> int:
         fi, ti = manager.IndexToNode(f), manager.IndexToNode(t)
         return dist_m[fi][ti] + service[fi]
 
@@ -133,86 +173,117 @@ def solve(inst, time_limit_sec=30):
         else:
             td.CumulVar(idx).SetRange(ready[i], due[i])
 
-    def dem_cb(f): return demands[manager.IndexToNode(f)]
+    def dem_cb(f: int) -> int:
+        return demands[manager.IndexToNode(f)]
+
     d_idx = routing.RegisterUnaryTransitCallback(dem_cb)
-    routing.AddDimensionWithVehicleCapacity(d_idx, 0, [cap]*nveh, True, "Cap")
+    routing.AddDimensionWithVehicleCapacity(d_idx, 0, [cap] * nveh, True, "Cap")
 
     sp = pywrapcp.DefaultRoutingSearchParameters()
-    sp.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
+    sp.first_solution_strategy    = routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
     sp.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
     sp.time_limit.FromSeconds(time_limit_sec)
 
-    t0  = time.time()
-    sol = routing.SolveWithParameters(sp)
+    t0      = time.time()
+    sol     = routing.SolveWithParameters(sp)
     elapsed = round(time.time() - t0, 1)
 
     if not sol:
         return None, None, elapsed
 
     total_dist = 0.0
-    veh_used = 0
+    veh_used   = 0
     for v in range(nveh):
-        idx = routing.Start(v)
-        rdist = 0.0; used = False
+        idx   = routing.Start(v)
+        rdist = 0.0
+        used  = False
         while not routing.IsEnd(idx):
-            nxt = sol.Value(routing.NextVar(idx))
-            ni, nj = manager.IndexToNode(idx), manager.IndexToNode(nxt)
+            nxt  = sol.Value(routing.NextVar(idx))
+            ni   = manager.IndexToNode(idx)
+            nj   = manager.IndexToNode(nxt)
             rdist += euclid(nodes[ni], nodes[nj])
-            if ni != 0: used = True
-            idx = nxt
+            if ni != 0:
+                used = True
+            idx  = nxt
         if used:
-            veh_used += 1
+            veh_used   += 1
             total_dist += rdist
 
     return round(total_dist, 2), veh_used, elapsed
 
-def main():
-    TL = 30
+
+def _gap_tag(gap: float) -> str:
+    """Gap에 따른 품질 태그 반환.
+
+    Args:
+        gap: BKS 대비 Gap (%)
+
+    Returns:
+        "✅", "⚠️", "❌" 중 하나
+    """
+    if gap < _GAP_EXCELLENT:   return "✅"
+    if gap < _GAP_ACCEPTABLE:  return "⚠️"
+    return "❌"
+
+
+def main() -> None:
+    """벤치마크 실행 및 결과 출력·저장."""
     print(f"\n{'='*74}")
-    print(f"  LogiTrack OR-Tools VRPTW — Solomon Benchmark 검증 (제한시간: {TL}초)")
+    print(f"  LogiTrack OR-Tools VRPTW — Solomon Benchmark 검증 (제한시간: {_TIME_LIMIT_SEC}초)")
     print(f"  BKS 출처: SINTEF / Solomon(1987)")
     print(f"{'='*74}")
     print(f"{'인스턴스':<28}{'BKS 차량':>8}{'결과':>6}{'BKS 거리':>10}{'결과 거리':>10}{'Gap':>8}{'시간':>6}")
     print(f"{'-'*74}")
 
-    rows, gaps = [], []
+    rows: list[dict] = []
+    gaps: list[float] = []
+
     for name, inst in INSTANCES.items():
-        dist, nv, t = solve(inst, TL)
+        dist, nv, t = solve(inst, _TIME_LIMIT_SEC)
         bks_d = inst["bks_distance"]
         bks_v = inst["bks_vehicles"]
 
         if dist is None:
             print(f"{name:<28}{bks_v:>8}{'N/A':>6}{bks_d:>10.2f}{'N/A':>10}{'N/A':>8}{t:>5}s  ❌미해결")
-            rows.append({"인스턴스":name,"BKS차량":bks_v,"결과차량":"N/A",
-                         "BKS거리":bks_d,"결과거리":"N/A","Gap(%)":"N/A","시간(s)":t})
+            rows.append({
+                "인스턴스": name, "BKS차량": bks_v, "결과차량": "N/A",
+                "BKS거리": bks_d, "결과거리": "N/A", "Gap(%)": "N/A", "시간(s)": t,
+            })
         else:
             gap = (dist - bks_d) / bks_d * 100
             gaps.append(gap)
-            tag = "✅" if gap < 5 else ("⚠️" if gap < 15 else "❌")
+            tag = _gap_tag(gap)
             print(f"{name:<28}{bks_v:>8}{nv:>6}{bks_d:>10.2f}{dist:>10.2f}{gap:>+7.1f}%{t:>5}s  {tag}")
-            rows.append({"인스턴스":name,"BKS차량":bks_v,"결과차량":nv,
-                         "BKS거리":bks_d,"결과거리":dist,"Gap(%)":round(gap,2),"시간(s)":t})
+            rows.append({
+                "인스턴스": name, "BKS차량": bks_v, "결과차량": nv,
+                "BKS거리": bks_d, "결과거리": dist, "Gap(%)": round(gap, 2), "시간(s)": t,
+            })
 
     print(f"{'-'*74}")
+
     if gaps:
-        avg = sum(gaps)/len(gaps)
+        avg = sum(gaps) / len(gaps)
         print(f"\n  평균 Gap: {avg:+.2f}%")
         print(f"\n  판정 기준:")
-        print(f"    ✅  0~ 5%  : 우수 — 상용 솔루션(Routific, OptimoRoute) 수준")
-        print(f"    ⚠️  5~15%  : 양호 — 실용적 배차 수준")
-        print(f"    ❌    >15% : 개선 필요")
-        if avg < 5:
+        print(f"    ✅  0~{_GAP_EXCELLENT:.0f}%  : 우수 — 상용 솔루션(Routific, OptimoRoute) 수준")
+        print(f"    ⚠️  {_GAP_EXCELLENT:.0f}~{_GAP_ACCEPTABLE:.0f}% : 양호 — 실용적 배차 수준")
+        print(f"    ❌    >{_GAP_ACCEPTABLE:.0f}% : 개선 필요")
+        if avg < _GAP_EXCELLENT:
             print(f"\n    → LogiTrack은 상용 배차 솔루션과 동급 품질입니다.")
-        elif avg < 15:
+        elif avg < _GAP_ACCEPTABLE:
             print(f"\n    → 최적화 시간을 늘리면 추가 개선 가능합니다.")
         else:
             print(f"\n    → 시간 제한 60초+ 또는 알고리즘 파라미터 조정을 권장합니다.")
 
-    with open("benchmark_result.csv","w",newline="",encoding="utf-8-sig") as f:
-        w = csv.DictWriter(f, fieldnames=rows[0].keys())
-        w.writeheader(); w.writerows(rows)
-    print(f"\n  결과 저장: benchmark_result.csv")
+    if rows:
+        with open(_CSV_OUTPUT_PATH, "w", newline="", encoding="utf-8-sig") as f:
+            w = csv.DictWriter(f, fieldnames=rows[0].keys())
+            w.writeheader()
+            w.writerows(rows)
+        print(f"\n  결과 저장: {_CSV_OUTPUT_PATH}")
+
     print(f"{'='*74}\n")
+
 
 if __name__ == "__main__":
     main()

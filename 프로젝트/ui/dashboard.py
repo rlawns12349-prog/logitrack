@@ -19,7 +19,7 @@ def render_dashboard(res: dict):
     # 뒤로가기
     cb, _ = st.columns([1, 4])
     with cb:
-        if st.button("🔙 대기열로 돌아가기", use_container_width=True):
+        if st.button("← 대기열로", use_container_width=True):
             st.session_state.opt_result = None
             st.rerun()
 
@@ -27,24 +27,38 @@ def render_dashboard(res: dict):
     for item in res.get("unassigned_diagnosed", []):
         st.error(f"🚨 **배차 불가: {item['name']}** — {item['reason']}")
 
+    # KPI 구분선
+    st.markdown(
+        '<p style="font-size:0.72rem;font-weight:700;color:#94a3b8;'
+        'text-transform:uppercase;letter-spacing:0.1em;margin:4px 0 10px 0;">'
+        '📊 오늘의 배차 결과</p>',
+        unsafe_allow_html=True,
+    )
+
     # KPI 메트릭
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("총 예상 비용", f"₩{int(res['total_cost']):,}",
               help=f"고정비 ₩{res['fixed_cost']:,} + 톨 ₩{int(res['toll_cost']):,}")
-    c2.metric("SLA 정시율", f"{res.get('sla', 100.0)}%",
+    c2.metric("납기 준수율", f"{res.get('sla', 100.0)}%",
               delta="목표달성" if res.get('sla', 100) >= 95 else f"{-res.get('late_count', 0)}건 지연",
               delta_color="normal" if res.get('sla', 100) >= 95 else "inverse")
-    c3.metric("거리 효율",    f"{res.get('efficiency', 0):+.1f}%")
-    c4.metric("Scope 3 CO₂", f"{res.get('co2_total', 0):.1f} kg")
-    c5.metric("운영 차량",    f"{len(res['routes'])} 대")
-    st.caption(
-        f"⏱️ 총 대기: **{int(res.get('wait_time_total', 0))}분** | "
-        f"배차 거점: **{sum(s['stops'] for s in res['truck_stats'].values())}개소**"
+    c3.metric("거리 효율", f"{res.get('efficiency', 0):+.1f}%",
+              help="최단 경로(NN) 대비 이동 거리 단축률. +가 클수록 효율적입니다.")
+    c4.metric("탄소 배출량", f"{res.get('co2_total', 0):.1f} kg")
+    c5.metric("운영 차량",   f"{len(res['routes'])} 대")
+
+    st.markdown(
+        f'<p style="font-size:0.8rem;color:#94a3b8;margin:6px 0 16px 0;">'
+        f'⏱ 총 대기 <b style="color:#e2e8f0">{int(res.get("wait_time_total", 0))}분</b>'
+        f'&nbsp;&nbsp;|&nbsp;&nbsp;'
+        f'배차 거점 <b style="color:#e2e8f0">{sum(s["stops"] for s in res["truck_stats"].values())}개소</b>'
+        f'</p>',
+        unsafe_allow_html=True,
     )
 
     tstats = res.get('truck_stats', {})
     tab_sum, tab_util, tab_esg, tab_lifo, tab_cost, tab_llm = st.tabs([
-        "🚛 운행요약", "📦 적재율", "🌱 ESG", "📋 LIFO", "💰 비용", "🤖 AI리포트",
+        "🚛 운행요약", "📦 적재율", "🌱 탄소배출", "📋 상차 순서", "💰 비용", "🤖 AI 브리핑",
     ])
 
     with tab_sum:
@@ -73,10 +87,38 @@ def _tab_summary(tstats):
         th, tm = int(s['time'] // 60), int(s['time'] % 60)
         fin = compute_truck_financials(s, st.session_state.cfg_fuel_price,
                                        st.session_state.cfg_labor)
-        st.info(
-            f"**{tn}**: {rstr} | {s['stops']}개소 · {s['dist']:.1f}km · "
-            f"{th}h{tm}m (대기{int(s['wait_time'])}분) | 변동비 ₩{int(fin['total_variable']):,}"
-        )
+        wt_pct = (s['used_wt'] / s['max_wt'] * 100) if s['max_wt'] > 0 else 0
+        bar_color = "#ef4444" if wt_pct > 90 else "#f59e0b" if wt_pct > 70 else "#22c55e"
+
+        st.markdown(f"""
+<div class="truck-card">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+    <span style="font-size:1rem;font-weight:700;color:#e2e8f0;">{tn}</span>
+    <span style="font-size:0.75rem;color:#94a3b8;font-family:'IBM Plex Mono',monospace;">
+      {s['stops']}개소 &nbsp;·&nbsp; {s['dist']:.1f}km &nbsp;·&nbsp; {th}h {tm}m
+    </span>
+  </div>
+  <div style="background:#0f1117;border-radius:6px;padding:8px 12px;
+              font-size:0.82rem;color:#94a3b8;line-height:1.8;margin-bottom:10px;
+              border:1px solid #2d3250;overflow-x:auto;white-space:nowrap;">
+    {rstr}
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;">
+    <div>
+      <div class="truck-card-label">변동비</div>
+      <div class="truck-card-value">₩{int(fin['total_variable']):,}</div>
+    </div>
+    <div>
+      <div class="truck-card-label">대기</div>
+      <div class="truck-card-value">{int(s['wait_time'])}분</div>
+    </div>
+    <div>
+      <div class="truck-card-label">적재율</div>
+      <div class="truck-card-value" style="color:{bar_color};">{wt_pct:.0f}%</div>
+    </div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
 
 def _tab_utilization(tstats):
@@ -88,19 +130,19 @@ def _tab_utilization(tstats):
             vp = (s['used_vol'] / s['max_vol']) * 100 if s['max_vol'] > 0 else 0
             st.progress(wp / 100, text=f"중량 {s['used_wt']}/{s['max_wt']}kg ({wp:.1f}%)")
             st.progress(vp / 100, text=f"부피 {s['used_vol']}/{s['max_vol']}CBM ({vp:.1f}%)")
-            if wp > 90: st.warning("중량 한계 임박")
-            if vp > 90: st.warning("부피 한계 임박")
+            if wp > 90: st.warning("⚠️ 중량이 거의 찼습니다 (90% 초과)")
+            if vp > 90: st.warning("⚠️ 적재 공간이 거의 찼습니다 (90% 초과)")
 
 
 def _tab_esg(tstats):
-    st.caption("GLEC Scope 3 | 공차 복귀 연비 향상 반영")
+    st.caption("GLEC 기준 Scope 3 탄소 배출량 | 공차 복귀 시 연비 향상 반영")
     rows = [
         {
             "트럭": tn,
-            "거리": f"{s['dist']:.1f}km",
-            "연료(L)": f"{s['fuel_liter']:.1f}",
-            "CO2e(kg)": f"{s['co2_kg']:.1f}",
-            "소나무": f"{s['co2_kg'] / 6.6:.1f}그루",
+            "이동 거리": f"{s['dist']:.1f}km",
+            "연료 소비(L)": f"{s['fuel_liter']:.1f}",
+            "CO₂ 배출(kg)": f"{s['co2_kg']:.1f}",
+            "상쇄 필요 소나무": f"{s['co2_kg'] / 6.6:.1f}그루",
         }
         for tn, s in tstats.items()
     ]
@@ -108,7 +150,7 @@ def _tab_esg(tstats):
 
 
 def _tab_lifo(tstats):
-    st.caption("LIFO 상차 순서 — 마지막 하차지부터 안쪽에 적재")
+    st.caption("상차 순서 — 마지막 하차지 화물을 가장 안쪽에 적재합니다")
     for tn, s in tstats.items():
         if not s['loads_detail']:
             continue
@@ -146,7 +188,9 @@ def _tab_cost(res, tstats):
 
 
 def _tab_llm(res, tstats):
-    st.caption("AI 배차 브리핑 자동 생성 (Claude / GPT-4o / Gemini)")
+    st.caption("배차 결과를 AI가 요약한 브리핑 문서를 자동 생성합니다.")
+    st.info("API 키가 있는 경우에만 사용 가능합니다. Claude, GPT-4o, Gemini 중 선택하세요.", icon="ℹ️")
+
     payload = {
         "date": datetime.now().strftime("%Y-%m-%d"),
         "hub":  res['hub_name'],
@@ -175,17 +219,17 @@ def _tab_llm(res, tstats):
         },
     }
 
-    with st.expander("📋 API 페이로드"):
+    with st.expander("📊 상세 데이터 보기"):
         st.json(payload)
 
-    llm     = st.selectbox("LLM", ["Claude (Anthropic)", "GPT-4o (OpenAI)", "Gemini (Google)"])
-    api_key = st.text_input("API 키", type="password", placeholder="입력 후 생성 클릭")
-    lang    = st.selectbox("언어", ["한국어", "English"])
+    llm     = st.selectbox("AI 모델 선택", ["Claude (Anthropic)", "GPT-4o (OpenAI)", "Gemini (Google)"])
+    api_key = st.text_input("API 키", type="password", placeholder="선택한 모델의 API 키를 입력하세요")
+    lang    = st.selectbox("브리핑 언어", ["한국어", "English"])
 
     if not st.button("🤖 브리핑 생성", type="primary", use_container_width=True):
         return
     if not api_key:
-        st.error("API 키를 입력하세요.")
+        st.error("API 키를 입력해야 브리핑을 생성할 수 있습니다.")
         return
 
     prompt = (
@@ -200,19 +244,18 @@ def _tab_llm(res, tstats):
             st.subheader("📄 배차 브리핑")
             st.markdown(ai)
             st.download_button(
-                "⬇️ 다운로드", data=ai.encode('utf-8'),
-                file_name=f"브리핑_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
+                "⬇️ 브리핑 다운로드", data=ai.encode('utf-8'),
+                file_name=f"배차브리핑_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
                 mime="text/plain",
             )
         except requests.RequestException as e:
             safe_msg = _safe_log_replace(str(e), api_key)
             logger.warning("LLM network error: %s", safe_msg)
-            st.error("❌ 네트워크 오류 (로그 확인)")
+            st.error("네트워크 오류가 발생했습니다. 인터넷 연결을 확인해주세요.")
         except Exception as e:
-            # DB-1: JSON 파싱 오류, KeyError 등 requests 외 예외도 처리
             safe_msg = _safe_log_replace(str(e), api_key)
             logger.warning("LLM unexpected error: %s", safe_msg)
-            st.error("❌ LLM 응답 처리 오류 (로그 확인)")
+            st.error("브리핑 생성 중 오류가 발생했습니다. API 키가 올바른지 확인해주세요.")
 
 
 def _call_llm(llm: str, api_key: str, prompt: str) -> str:
