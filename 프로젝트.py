@@ -13,19 +13,6 @@
 
 [4차 신규 차별화 — 경쟁사 완전 공백 영역]
 
-  D8. AI 재배차 어시스턴트 (Anthropic API 대화형)
-      배차 결과를 놓고 관리자가 자연어로 질문·지시하면
-      AI가 구체적 개선 제안을 실시간으로 대화 형태로 제공.
-      예: "T2 차량에 냉동 화물이 너무 많은데?" → AI가 재배분 방안 제안
-      경쟁사는 결과 화면만 제공, 대화형 어시스턴트 전무.
-
-  D9. 배송권역 자동 클러스터링 시각화
-      배송지 좌표를 위도·경도 기반으로 k-means 계열 클러스터링해서
-      최적 권역 분할을 히트맵 형태로 보여줌.
-      "이 배송지들이 원래 같은 권역이어야 하나요?" 질문에 데이터로 답변.
-      경쟁사는 경로 결과만 보여줌, 권역 분석 제공 없음.
-
-  D10. 일별 비용 트렌드 누적 추적기
        매 최적화 실행 결과를 세션에 누적해서 오늘 몇 번 돌렸고
        총비용·총거리·평균 SLA가 어떻게 변했는지 인라인 차트로 표시.
        "오전 배차보다 오후 배차가 왜 더 비쌌나?" 즉시 확인 가능.
@@ -157,8 +144,6 @@ _SESSION_DEFAULTS: dict[str, Any] = {
     "cfg_v1_skills": [], "cfg_v2_skills": [], "cfg_v5_skills": [],
     "_last_upload_id": "", "_balloons_shown": False, "_opt_in_progress": False,
     "_prev_sla": -1.0, "_prev_eff": -1.0,
-    # D8: 대화형 어시스턴트 히스토리
-    "_assistant_history": [],
     # D10: 누적 실행 기록
     "_run_log": [],
     # D13: 사전 예보 캐시
@@ -563,211 +548,6 @@ def _detect_deadhead(res: dict) -> list[dict]:
                             "msg": f"{row['트럭']}: 복귀 {d:.1f}km — 귀로 픽업 또는 인근 환적 고려"})
         except ValueError: pass
     return out
-
-
-# ══════════════════════════════════════════════════════════════════════
-# D8. AI 재배차 어시스턴트 (대화형)
-# ══════════════════════════════════════════════════════════════════════
-_ASSISTANT_SYSTEM = """당신은 물류 배차 최적화 전문 AI 어시스턴트입니다.
-관리자가 배차 결과를 보며 질문하면 구체적이고 실행 가능한 개선 방안을 제시하세요.
-- 항상 한국어로 답변하세요.
-- 짧고 명확하게: 3~6문장 이내.
-- 수치가 있으면 반드시 인용하세요.
-- 모호한 질문에는 핵심만 짚어 답하세요."""
-
-def render_ai_assistant(res: dict) -> None:
-    """[D8] 대화형 AI 재배차 어시스턴트 패널"""
-    with st.expander("💬 AI 재배차 어시스턴트 (대화형)", expanded=False):
-        if not ANTHROPIC_API_KEY:
-            st.info("ANTHROPIC_API_KEY를 설정하면 AI 어시스턴트를 사용할 수 있습니다.")
-            return
-
-        st.caption("배차 결과를 보며 자유롭게 질문하세요. AI가 개선 방안을 제안합니다.")
-
-        # 대화 히스토리 표시
-        history: list[dict] = st.session_state._assistant_history
-        for msg in history:
-            role_icon = "🧑 관리자" if msg["role"] == "user" else "🤖 AI"
-            with st.chat_message(msg["role"]):
-                st.write(f"**{role_icon}**: {msg['content']}")
-
-        # 빠른 질문 버튼
-        st.markdown("**빠른 질문:**")
-        quick_cols = st.columns(3)
-        quick_questions = [
-            "가장 과부하된 차량은?",
-            "SLA 올리려면?",
-            "비용 줄이는 방법은?",
-        ]
-        for i, q in enumerate(quick_questions):
-            if quick_cols[i].button(q, key=f"quick_{i}", use_container_width=True):
-                st.session_state._assistant_quick = q
-
-        # 사용자 입력
-        user_input = st.chat_input("예: T2 차량 경로를 T1으로 옮기면 어떻게 되나요?")
-        if hasattr(st.session_state, "_assistant_quick"):
-            user_input = st.session_state._assistant_quick
-            del st.session_state._assistant_quick
-
-        if user_input:
-            # 컨텍스트 요약 (토큰 절약)
-            context = {
-                "차량별_요약": {
-                    k: {"stops": v.get("stops", 0), "dist": round(v.get("dist", 0), 1),
-                        "time_min": int(v.get("time", 0)), "load_pct": round(
-                            v.get("used_wt", 0) / max(v.get("max_wt", 1), 1) * 100, 1),
-                        "fatigue": _calc_fatigue(v), "fuel_cost": int(v.get("fuel_cost", 0))}
-                    for k, v in res.get("truck_stats", {}).items()
-                },
-                "SLA": res.get("sla", 100), "효율": res.get("efficiency", 0),
-                "미배차수": len(res.get("unassigned", [])),
-                "총비용": int(res.get("total_cost", 0)),
-            }
-            messages_to_send = history[-6:] + [  # 최근 6턴만 유지
-                {"role": "user", "content":
-                 f"[배차현황]\n{json.dumps(context, ensure_ascii=False)}\n\n질문: {user_input}"}
-            ]
-            with st.spinner("AI 분석 중..."):
-                answer = _call_anthropic(messages_to_send, system=_ASSISTANT_SYSTEM, max_tokens=400)
-
-            if answer:
-                st.session_state._assistant_history.append(
-                    {"role": "user", "content": user_input})
-                st.session_state._assistant_history.append(
-                    {"role": "assistant", "content": answer})
-                # 히스토리 최대 20턴 유지
-                if len(st.session_state._assistant_history) > 20:
-                    st.session_state._assistant_history = \
-                        st.session_state._assistant_history[-20:]
-                st.rerun()
-            else:
-                st.warning("AI 응답을 받지 못했습니다. 잠시 후 다시 시도하세요.")
-
-        if history and st.button("🗑️ 대화 초기화", use_container_width=True):
-            st.session_state._assistant_history = []
-            st.rerun()
-
-
-# ══════════════════════════════════════════════════════════════════════
-# D9. 배송권역 클러스터링 시각화
-# ══════════════════════════════════════════════════════════════════════
-def _kmeans_simple(points: list[tuple[float, float]], k: int,
-                   iters: int = 30) -> list[int]:
-    """외부 라이브러리 없는 간단한 k-means (Lloyd's algorithm)"""
-    if not points or k <= 0:
-        return []
-    k = min(k, len(points))
-    # 초기 중심: 등간격 샘플
-    step    = max(1, len(points) // k)
-    centers = [list(points[i * step]) for i in range(k)]
-
-    labels = [0] * len(points)
-    for _ in range(iters):
-        # 할당
-        for j, (lat, lon) in enumerate(points):
-            best, best_d = 0, float("inf")
-            for ci, (clat, clon) in enumerate(centers):
-                d = (lat - clat) ** 2 + (lon - clon) ** 2
-                if d < best_d:
-                    best_d, best = d, ci
-            labels[j] = best
-        # 중심 갱신
-        new_centers = [[0.0, 0.0, 0] for _ in range(k)]
-        for j, (lat, lon) in enumerate(points):
-            c = labels[j]
-            new_centers[c][0] += lat
-            new_centers[c][1] += lon
-            new_centers[c][2] += 1
-        for ci in range(k):
-            cnt = new_centers[ci][2]
-            if cnt > 0:
-                centers[ci] = [new_centers[ci][0] / cnt, new_centers[ci][1] / cnt]
-    return labels
-
-
-def render_cluster_analysis(res: dict) -> None:
-    """[D9] 배송권역 자동 클러스터링 시각화"""
-    with st.expander("🗺️ 배송권역 클러스터링 분석", expanded=False):
-        st.caption(
-            "배송지 좌표를 자동 군집화해 최적 권역 분할을 제안합니다. "
-            "실제 배차 결과와 비교해 권역 재설계 여부를 판단하세요."
-        )
-
-        routes = res.get("routes", [])
-        if not routes:
-            st.info("배차 결과가 없습니다."); return
-
-        # 허브 이름 수집
-        hub_name = res.get("hub_name", "")
-        all_nodes: list[dict] = []
-        for plan in routes:
-            for n in plan:
-                if n.get("name") != hub_name and "lat" in n and "lon" in n:
-                    all_nodes.append(n)
-
-        if len(all_nodes) < 2:
-            st.info("클러스터링에 필요한 배송지가 부족합니다."); return
-
-        n_clusters = st.slider("권역 수 (k)", 2, min(8, len(all_nodes)), len(routes),
-                               key="cluster_k")
-        points  = [(n["lat"], n["lon"]) for n in all_nodes]
-        labels  = _kmeans_simple(points, n_clusters)
-
-        # 클러스터별 통계
-        cluster_stats: dict[int, dict] = defaultdict(
-            lambda: {"nodes": [], "total_w": 0.0, "total_v": 0.0})
-        for j, node in enumerate(all_nodes):
-            c = labels[j]
-            cluster_stats[c]["nodes"].append(node.get("name", "?"))
-            cluster_stats[c]["total_w"] += node.get("weight", 0)
-            cluster_stats[c]["total_v"] += node.get("volume", 0)
-
-        # 실제 배차 클러스터와 제안 클러스터 비교 테이블
-        rows = []
-        for ci in sorted(cluster_stats.keys()):
-            st_data = cluster_stats[ci]
-            rows.append({
-                "권역":      f"권역 {ci+1}",
-                "배송지 수": len(st_data["nodes"]),
-                "총 무게":   f"{st_data['total_w']:.1f}kg",
-                "총 부피":   f"{st_data['total_v']:.2f}CBM",
-                "거점 목록": ", ".join(st_data["nodes"][:5])
-                             + ("..." if len(st_data["nodes"]) > 5 else ""),
-            })
-
-        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
-
-        # 실제 배차 vs 제안 권역 일치율 계산
-        actual_clusters: dict[str, int] = {}
-        for vi, plan in enumerate(routes):
-            for n in plan:
-                if n.get("name") != hub_name:
-                    actual_clusters[n.get("name", "")] = vi
-
-        # 제안 권역별 실제 배차 차량 분포 확인
-        mismatch = 0
-        for j, node in enumerate(all_nodes):
-            name = node.get("name", "")
-            proposed_cluster  = labels[j]
-            actual_vehicle    = actual_clusters.get(name, -1)
-            # 같은 제안 권역 내 노드들이 같은 실제 차량에 배차됐는지 확인
-            same_cluster_nodes = [all_nodes[x].get("name", "") for x in range(len(all_nodes))
-                                  if labels[x] == proposed_cluster]
-            actual_vehicles_in_cluster = {actual_clusters.get(n, -1)
-                                          for n in same_cluster_nodes}
-            if len(actual_vehicles_in_cluster) > 1:
-                mismatch += 1
-
-        match_pct = max(0, round((1 - mismatch / max(len(all_nodes), 1)) * 100, 1))
-        col1, col2 = st.columns(2)
-        col1.metric("권역-배차 일치율", f"{match_pct}%",
-                    help="제안 권역과 실제 배차 결과가 얼마나 일치하는지")
-        col2.metric("분석 배송지 수", len(all_nodes))
-        if match_pct < 70:
-            st.warning(
-                f"⚠️ 배차 일치율 {match_pct}% — 현재 배송지들이 권역 경계를 많이 넘어 배차되고 있습니다. "
-                "허브 위치 재검토 또는 권역 기반 사전 필터링을 권장합니다."
-            )
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1487,9 +1267,9 @@ def render_driver_equity(res: dict) -> None:
             if eq["cv_stops"] > 0.25:
                 st.info(f"정지 수 불균형이 큽니다. {worst} 차량의 배송지 일부를 인근 차량으로 이동하세요.")
             if eq["cv_dist"] > 0.25:
-                st.info(f"거리 불균형이 큽니다. 권역 클러스터링(D9)을 참고해 권역을 재조정하세요.")
+                st.info(f"거리 불균형이 큽니다. {worst} 차량의 배송지 일부를 인근 차량으로 이동하세요.")
             if eq["cv_fatigue"] > 0.25:
-                st.info("피로도 편차가 큽니다. 대화형 AI 어시스턴트(D8)에게 재배분 방안을 물어보세요.")
+                st.info(f"피로도 편차가 큽니다. {worst} 차량의 부담을 줄이는 방향으로 배송지를 재조정하세요.")
 
         st.caption("CV(변동계수) = 표준편차/평균. 0에 가까울수록 균등 분배.")
 
@@ -2020,11 +1800,6 @@ def _render_result_page() -> None:
     render_dashboard(res)
     st.divider()
 
-    # D8: 대화형 AI 어시스턴트
-    render_ai_assistant(res)
-
-    # D9: 배송권역 클러스터링
-    render_cluster_analysis(res)
 
     # D14: 기사별 공정성 지수
     render_driver_equity(res)
@@ -2086,7 +1861,7 @@ st.markdown("""
   <span class="lt-badge">배차 최적화</span>
 </div>
 <p style="color:#94a3b8;font-size:0.82rem;margin:0 0 12px 0;">
-  실측 경로 최적화 &nbsp;·&nbsp; AI 어시스턴트 &nbsp;·&nbsp; 사전 예보 &nbsp;·&nbsp; 공정성 지수 &nbsp;·&nbsp; 권역 클러스터링
+  실측 경로 최적화 &nbsp;·&nbsp; 사전 예보 &nbsp;·&nbsp; 공정성 지수
 </p>
 """, unsafe_allow_html=True)
 
