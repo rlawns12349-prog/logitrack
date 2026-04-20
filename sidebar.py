@@ -78,8 +78,9 @@ def render_sidebar(db, kakao_key: str) -> None:
         kakao_key: Kakao REST API 키
     """
     with st.sidebar:
+        # ── 헤더 ──
         st.markdown("""
-<div style="padding:12px 0 8px 0;border-bottom:1px solid #2d3250;margin-bottom:12px;">
+<div style="padding:12px 0 8px 0;border-bottom:1px solid #2d3250;margin-bottom:16px;">
   <div style="font-size:1.1rem;font-weight:700;letter-spacing:-0.01em;">🚚 LogiTrack</div>
   <div style="font-size:0.72rem;color:#94a3b8;margin-top:2px;font-weight:500;">
     배차 최적화 시스템
@@ -87,13 +88,79 @@ def render_sidebar(db, kakao_key: str) -> None:
 </div>
 """, unsafe_allow_html=True)
 
-        _render_scenario_panel(db)
-        st.divider()
-        _render_location_panel(db, kakao_key)
+        # ── 진행 상태 계산 ──
+        has_locations = bool(st.session_state.get("db_data"))
+        has_hub       = bool(st.session_state.get("start_node"))
+        has_targets   = bool(st.session_state.get("targets"))
+
+        step1_done = has_locations
+        step2_done = has_hub and has_targets
+
+        def _step_badge(num: int, label: str, done: bool, active: bool) -> str:
+            if done:
+                bg, fg, icon       = "#052e16", "#4ade80", "✓"
+                circle_bg          = "#16a34a"
+                border             = "1px solid #16a34a"
+                fw                 = "600"
+            elif active:
+                bg, fg, icon       = "#172554", "#93c5fd", str(num)
+                circle_bg          = "#2563eb"
+                border             = "2px solid #3b82f6"
+                fw                 = "700"
+            else:
+                bg, fg, icon       = "#0f1117", "#334155", str(num)
+                circle_bg          = "#1e293b"
+                border             = "1px solid #1e293b"
+                fw                 = "400"
+            return (
+                f'<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;'
+                f'margin-bottom:6px;border-radius:8px;background:{bg};border:{border};">'
+                f'<span style="width:22px;height:22px;border-radius:50%;background:{circle_bg};'
+                f'color:#fff;font-size:0.7rem;font-weight:700;display:flex;align-items:center;'
+                f'justify-content:center;flex-shrink:0;">{icon}</span>'
+                f'<span style="font-size:0.8rem;font-weight:{fw};color:{fg};">{label}</span>'
+                f'</div>'
+            )
+
+        st.markdown("""<div style="font-size:0.7rem;font-weight:600;color:#64748b;
+            letter-spacing:0.08em;margin-bottom:6px;">시작 가이드</div>""",
+            unsafe_allow_html=True)
+
+        guide_html = (
+            _step_badge(1, "거점 등록 (출발·도착지 주소)", step1_done, not step1_done) +
+            _step_badge(2, "허브 선택 & 배송지 추가",      step2_done, step1_done and not step2_done) +
+            _step_badge(3, "메인 화면에서 최적화 실행",     False,      step2_done)
+        )
+        st.markdown(guide_html, unsafe_allow_html=True)
+
+        # ── STEP 1: CSV 업로드 ──
+        st.markdown(
+            '<div style="margin:16px 0 6px 0;padding:6px 10px;'
+            'background:#0f2040;border-left:3px solid #3b82f6;border-radius:0 6px 6px 0;">'
+            '<span style="font-size:0.7rem;font-weight:700;color:#3b82f6;letter-spacing:0.1em;">STEP 1</span>'
+            '<span style="font-size:0.78rem;font-weight:600;color:#cbd5e1;margin-left:8px;">거점·배송지 등록</span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
         _render_csv_upload(db, kakao_key)
-        st.divider()
-        _render_location_delete(db)
+
+        # ── STEP 2: 허브 & 배송지 ──
+        st.markdown(
+            '<div style="margin:16px 0 6px 0;padding:6px 10px;'
+            'background:#0f2040;border-left:3px solid #3b82f6;border-radius:0 6px 6px 0;">'
+            '<span style="font-size:0.7rem;font-weight:700;color:#3b82f6;letter-spacing:0.1em;">STEP 2</span>'
+            '<span style="font-size:0.78rem;font-weight:600;color:#cbd5e1;margin-left:8px;">허브 & 배송지 확인</span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
         _render_target_queue(db)
+
+        # ── 보조 기능 ──
+        st.markdown('<div style="margin-top:8px;"></div>', unsafe_allow_html=True)
+        st.divider()
+        _render_scenario_panel(db)
+        _render_location_edit_standalone(db, kakao_key)
+        _render_location_delete(db)
 
 
 # ── 시나리오 패널 ─────────────────────────────────
@@ -149,37 +216,10 @@ def _render_scenario_panel(db) -> None:
 
 # ── 거점 등록/수정 패널 ───────────────────────────
 
-def _render_location_panel(db, kakao_key: str) -> None:
-    """거점 등록 및 좌표 수정 패널."""
-    st.subheader("🏢 거점 등록")
-    n_addr = st.text_input("주소 또는 장소명", placeholder="예: 평택항")
-    n_name = st.text_input("지점명 (비워두면 자동)", placeholder="예: 서울허브")
-
-    if st.button("💾 등록", use_container_width=True):
-        if not n_addr:
-            st.warning("⚠️ 주소를 입력하세요.")
-        else:
-            lat, lon, f_addr, err = get_kakao_coordinate(n_addr, kakao_key)
-            if lat:
-                final    = n_name if n_name else f_addr
-                ok, reason = db.insert_location(final, lat, lon, f_addr)
-                if ok:
-                    st.session_state.db_data = db.load_locations()
-                    st.toast(f"✅ '{final}' 등록 완료")
-                    st.rerun()
-                elif reason == "duplicate":
-                    st.error("❌ 이미 존재하는 지점명입니다.")
-                else:
-                    st.error(f"❌ DB 오류: {reason}")
-            else:
-                st.error(f"❌ {err}")
-
-    if st.session_state.db_data:
-        _render_location_edit(db, kakao_key)
-
-
-def _render_location_edit(db, kakao_key: str) -> None:
-    """거점 좌표 수정 UI (분리)."""
+def _render_location_edit_standalone(db, kakao_key: str) -> None:
+    """거점 좌표 수정 (보조 기능 — CSV 등록 후 잘못된 좌표 수정용)."""
+    if not st.session_state.db_data:
+        return
     with st.expander("✏️ 거점 좌표 수정"):
         edit_n = st.selectbox(
             "수정할 거점",
@@ -192,6 +232,7 @@ def _render_location_edit(db, kakao_key: str) -> None:
                 if not edit_addr:
                     st.warning("새 주소를 입력하세요.")
                 else:
+                    from routing import get_kakao_coordinate
                     lat, lon, f_addr, err = get_kakao_coordinate(edit_addr, kakao_key)
                     if lat:
                         ok, e2 = db.update_location(edit_n, lat, lon, f_addr)
@@ -208,41 +249,60 @@ def _render_location_edit(db, kakao_key: str) -> None:
 # ── CSV 업로드 패널 ───────────────────────────────
 
 _CSV_TEMPLATE = (
-    "[설정]\n항목,값,설명\n"
-    "출발시간,09:00,HH:MM 형식으로 입력\n"
-    "기상상황,맑음,맑음 / 비 / 눈 중 선택\n"
+    # ── [설정] 섹션: 오늘 운행 기본 조건 ──────────────────────────────────────────
+    # 값만 바꾸면 됩니다. 항목명·설명 열은 수정하지 마세요.
+    "[설정]\n"
+    "항목,값,설명\n"
+    "출발시간,09:00,HH:MM 형식 (예: 08:30)\n"
     "1톤트럭수,2,운행할 1톤 트럭 대수\n"
     "2.5톤트럭수,1,운행할 2.5톤 트럭 대수\n"
     "5톤트럭수,0,운행할 5톤 트럭 대수\n"
-    "최대근로시간(시간),10,기사 1인 최대 근무 시간\n"
-    "경유단가(원/L),1500,현재 경유 단가\n"
-    "인건비(원/시간),15000,기사 시간당 인건비\n"
+    "\n"
+    # ── [거점] 섹션 ────────────────────────────────────────────────────────────────
+    # ★ 굵게 표시된 열이 필수입니다. 나머지는 비워두면 기본값이 적용됩니다.
+    # 허브여부: 허브 또는 배송지  (출발 거점은 반드시 1개 '허브'로 지정)
+    # 온도관리: 상온 / 냉장 / 냉동  (기본값: 상온)
+    # 우선순위: VIP / 일반 / 여유   (기본값: 일반)
+    # 배송가능시간: HH:MM~HH:MM 형식  (기본값: 09:00~18:00)
     "[거점]\n"
-    "지점명,주소,허브여부,무게(kg),부피(CBM),온도관리,하차방식,진입난이도,우선순위,시간제약유형,배송가능시간,메모\n"
-    "서울허브,서울특별시 중구 세종대로 110,허브,0,0,상온,지게차,일반,일반,고정,00:00~23:59,출발 거점\n"
-    "강남센터,서울특별시 강남구 테헤란로 152,배송지,450,2.1,냉장,수작업,보안아파트,VIP,고정,09:00~13:00,오전 배송 필수\n"
-    "마포물류,서울특별시 마포구 월드컵북로 400,배송지,300,1.5,상온,수작업,일반,일반,유동,09:00~18:00,\n"
-    "송파센터,서울특별시 송파구 올림픽로 300,배송지,600,3.0,냉동,지게차,일반,여유,유동,13:00~18:00,오후 배송"
+    "지점명(필수),주소(필수),허브여부(필수),무게kg(필수),온도관리,우선순위,배송가능시간,메모\n"
+    "# 아래 예시를 지우고 실제 데이터를 입력하세요\n"
+    "서울허브,서울특별시 중구 세종대로 110,허브,0,상온,일반,00:00~23:59,출발 거점\n"
+    "강남고객사,서울특별시 강남구 테헤란로 152,배송지,450,냉장,VIP,09:00~13:00,오전 배송 필수\n"
+    "마포고객사,서울특별시 마포구 월드컵북로 400,배송지,300,상온,일반,09:00~18:00,\n"
+    "송파고객사,서울특별시 송파구 올림픽로 300,배송지,600,냉동,여유,13:00~18:00,오후 배송\n"
 )
 
 
 def _render_csv_upload(db, kakao_key: str) -> None:
     """CSV 일괄 거점 등록 패널."""
-    with st.expander("📥 CSV 일괄 업로드"):
-        st.info(
-            "**사용 방법**\n\n"
-            "1. **템플릿 다운로드** 버튼으로 CSV 파일을 받으세요.\n"
-            "2. 엑셀 또는 메모장에서 내용을 채운 뒤 저장하세요.\n"
-            "3. **Upload** 버튼으로 파일을 업로드하면 자동으로 거점·배차 대기열에 등록됩니다."
-        )
+    has_data = bool(st.session_state.get("db_data"))
+    with st.expander("📥 CSV로 거점·배송지 등록", expanded=not has_data):
+        st.markdown("""
+<div style="background:#0f2240;border:1px solid #1e40af;border-radius:8px;padding:12px 14px;margin-bottom:12px;">
+  <div style="font-size:0.8rem;font-weight:600;color:#93c5fd;margin-bottom:6px;">📋 사용 방법 (3단계)</div>
+  <div style="font-size:0.78rem;color:#94a3b8;line-height:1.8;">
+    <b style="color:#e2e8f0;">① 템플릿 다운로드</b> → 엑셀로 열기<br>
+    <b style="color:#e2e8f0;">② 예시 행 삭제</b> 후 실제 데이터 입력 → CSV로 저장<br>
+    <b style="color:#e2e8f0;">③ 아래에 파일 업로드</b> → 자동으로 거점·배송 대기열 등록
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
         st.download_button(
-            "📄 템플릿 다운로드",
+            "📄 템플릿 다운로드 (엑셀로 열기)",
             data=_CSV_TEMPLATE.encode("utf-8-sig"),
             file_name="배차계획_템플릿.csv",
             mime="text/csv",
             use_container_width=True,
         )
-        uploaded = st.file_uploader("CSV 업로드", type=["csv"], label_visibility="collapsed")
+
+        st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+        uploaded = st.file_uploader(
+            "완성된 CSV 파일을 여기에 올려주세요",
+            type=["csv"],
+            help="엑셀에서 저장 시 '다른 이름으로 저장 → CSV UTF-8' 을 선택하세요.",
+        )
         if uploaded is None:
             return
 
@@ -433,7 +493,7 @@ def _parse_csv_sections(text: str) -> tuple[dict, list[str], Optional[list[str]]
 
     for line in text.splitlines():
         line = line.strip()
-        if not line:
+        if not line or line.startswith("#"):  # 빈 행·주석 행 무시
             continue
         if line == "[설정]":
             mode = "cfg"; continue
@@ -566,6 +626,11 @@ def _render_location_delete(db) -> None:
 
 def _render_target_queue(db) -> None:
     """배송지 추가 패널."""
+    st.markdown(
+        '<div style="font-size:0.7rem;font-weight:700;color:#3b82f6;letter-spacing:0.1em;'
+        'margin-bottom:4px;">STEP 2</div>',
+        unsafe_allow_html=True,
+    )
     st.subheader("🚚 배송지 추가")
     if not st.session_state.db_data:
         return

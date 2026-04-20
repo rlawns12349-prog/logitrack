@@ -13,11 +13,6 @@
 
 [4차 신규 차별화 — 경쟁사 완전 공백 영역]
 
-  D8. AI 재배차 어시스턴트 (Anthropic API 대화형)
-      배차 결과를 놓고 관리자가 자연어로 질문·지시하면
-      AI가 구체적 개선 제안을 실시간으로 대화 형태로 제공.
-      예: "T2 차량에 냉동 화물이 너무 많은데?" → AI가 재배분 방안 제안
-      경쟁사는 결과 화면만 제공, 대화형 어시스턴트 전무.
 
   D9. 배송권역 자동 클러스터링 시각화
       배송지 좌표를 위도·경도 기반으로 k-means 계열 클러스터링해서
@@ -157,8 +152,6 @@ _SESSION_DEFAULTS: dict[str, Any] = {
     "cfg_v1_skills": [], "cfg_v2_skills": [], "cfg_v5_skills": [],
     "_last_upload_id": "", "_balloons_shown": False, "_opt_in_progress": False,
     "_prev_sla": -1.0, "_prev_eff": -1.0,
-    # D8: 대화형 어시스턴트 히스토리
-    "_assistant_history": [],
     # D10: 누적 실행 기록
     "_run_log": [],
     # D13: 사전 예보 캐시
@@ -177,29 +170,24 @@ if not st.session_state.db_data:
 
 st.markdown("""
 <style>
-/* ── Google Fonts ───────────────────────────── */
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
-/* ── 디자인 토큰 ─────────────────────────────── */
 :root {
-  --bg:        #0f1117;
-  --surface:   #1a1d27;
-  --surface2:  #22263a;
-  --border:    #2d3250;
-  --accent:    #4f8ef7;
-  --accent-dk: #2563eb;
-  --green:     #22c55e;
-  --amber:     #f59e0b;
-  --red:       #ef4444;
-  --text:      #e2e8f0;
-  --muted:     #94a3b8;
-  --radius:    12px;
-  --radius-sm: 7px;
-  --font:      'IBM Plex Sans KR', -apple-system, sans-serif;
-  --mono:      'IBM Plex Mono', monospace;
+  --bg:       #0f1117;
+  --surface:  #161b27;
+  --surface2: #1e2537;
+  --border:   #2a3145;
+  --accent:   #4f8ef7;
+  --green:    #22c55e;
+  --amber:    #f59e0b;
+  --red:      #ef4444;
+  --text:     #e2e8f0;
+  --muted:    #7c8fa6;
+  --radius:   10px;
+  --font:     'Inter', -apple-system, sans-serif;
 }
 
-/* ── 전역 ────────────────────────────────────── */
+/* 전역 */
 html, body,
 [data-testid="stApp"],
 [data-testid="stAppViewContainer"] > .main {
@@ -207,6 +195,8 @@ html, body,
   color: var(--text) !important;
   font-family: var(--font) !important;
 }
+
+/* 사이드바 */
 section[data-testid="stSidebar"] {
   background: var(--surface) !important;
   border-right: 1px solid var(--border) !important;
@@ -218,132 +208,94 @@ section[data-testid="stSidebar"] * { color: var(--text) !important; }
   background: var(--surface2) !important;
   border: 1px solid var(--border) !important;
   color: var(--text) !important;
-  border-radius: var(--radius-sm) !important;
+  border-radius: 6px !important;
 }
 
-/* ── 타이포그래피 ────────────────────────────── */
-h1 {
-  font-size: 1.65rem !important;
-  font-weight: 700 !important;
-  letter-spacing: -0.02em !important;
-  color: var(--text) !important;
-  margin-bottom: 0 !important;
-}
-h2, h3 {
-  font-weight: 600 !important;
-  color: var(--text) !important;
-}
+/* 타이포 */
+h1 { font-size: 1.5rem !important; font-weight: 700 !important; color: var(--text) !important; }
+h2, h3 { font-weight: 600 !important; color: var(--text) !important; }
 .stCaption, [data-testid="stCaptionContainer"] {
-  color: var(--muted) !important;
-  font-size: 0.82rem !important;
+  color: var(--muted) !important; font-size: 0.8rem !important;
 }
 
-/* ── 메트릭 카드 ─────────────────────────────── */
+/* 메트릭 */
 [data-testid="stMetric"] {
   background: var(--surface) !important;
   border: 1px solid var(--border) !important;
   border-radius: var(--radius) !important;
-  padding: 14px 18px !important;
+  padding: 12px 16px !important;
 }
 [data-testid="stMetricValue"] {
-  font-size: 1.6rem !important;
-  font-weight: 700 !important;
-  color: var(--accent) !important;
-  font-family: var(--mono) !important;
+  font-size: 1.4rem !important; font-weight: 700 !important;
+  color: var(--text) !important;
 }
 [data-testid="stMetricLabel"] {
-  font-size: 0.78rem !important;
-  color: var(--muted) !important;
+  font-size: 0.75rem !important; color: var(--muted) !important;
   font-weight: 500 !important;
-  text-transform: uppercase !important;
-  letter-spacing: 0.06em !important;
-}
-[data-testid="stMetricDelta"] {
-  font-size: 0.8rem !important;
 }
 
-/* ── 버튼 ────────────────────────────────────── */
+/* 버튼 */
 .stButton > button {
   background: var(--surface2) !important;
   border: 1px solid var(--border) !important;
-  border-radius: var(--radius-sm) !important;
+  border-radius: 6px !important;
   color: var(--text) !important;
   font-family: var(--font) !important;
-  font-weight: 600 !important;
+  font-weight: 500 !important;
   font-size: 0.85rem !important;
-  transition: all 0.15s ease !important;
+  transition: border-color 0.15s, color 0.15s !important;
 }
 .stButton > button:hover {
   border-color: var(--accent) !important;
   color: var(--accent) !important;
-  background: rgba(79,142,247,0.08) !important;
 }
 .stButton > button[kind="primary"] {
-  background: var(--accent-dk) !important;
-  border-color: var(--accent-dk) !important;
-  color: #fff !important;
-}
-.stButton > button[kind="primary"]:hover {
   background: var(--accent) !important;
   border-color: var(--accent) !important;
   color: #fff !important;
 }
 
-/* ── 입력 요소 ───────────────────────────────── */
+/* 입력 */
 input, select, textarea,
 [data-baseweb="input"] input,
 [data-baseweb="select"] div,
 [data-baseweb="textarea"] textarea {
   background: var(--surface2) !important;
   border: 1px solid var(--border) !important;
-  border-radius: var(--radius-sm) !important;
+  border-radius: 6px !important;
   color: var(--text) !important;
-  font-family: var(--font) !important;
-}
-[data-baseweb="select"] > div {
-  background: var(--surface2) !important;
-  border-color: var(--border) !important;
 }
 
-/* ── expander ────────────────────────────────── */
+/* expander */
 [data-testid="stExpander"] {
   background: var(--surface) !important;
   border: 1px solid var(--border) !important;
   border-radius: var(--radius) !important;
-  margin-bottom: 10px !important;
+  margin-bottom: 8px !important;
 }
 [data-testid="stExpander"] summary {
-  font-weight: 600 !important;
-  font-size: 0.9rem !important;
-  padding: 12px 16px !important;
+  font-weight: 500 !important;
+  font-size: 0.88rem !important;
+  padding: 10px 14px !important;
   color: var(--text) !important;
 }
-[data-testid="stExpander"] summary:hover {
-  color: var(--accent) !important;
-  background: rgba(79,142,247,0.05) !important;
-  border-radius: var(--radius) var(--radius) 0 0 !important;
-}
 
-/* ── 탭 ──────────────────────────────────────── */
+/* 탭 */
 [data-testid="stTabs"] [role="tablist"] {
   background: var(--surface) !important;
   border-bottom: 1px solid var(--border) !important;
-  border-radius: var(--radius) var(--radius) 0 0 !important;
-  gap: 2px !important;
   padding: 4px 8px 0 !important;
+  gap: 2px !important;
 }
 [data-testid="stTabs"] [role="tab"] {
   background: transparent !important;
   border: none !important;
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0 !important;
   color: var(--muted) !important;
   font-size: 0.82rem !important;
-  font-weight: 600 !important;
-  padding: 8px 14px !important;
-  transition: all 0.12s !important;
+  font-weight: 500 !important;
+  padding: 7px 14px !important;
 }
 [data-testid="stTabs"] [role="tab"][aria-selected="true"] {
-  background: var(--surface2) !important;
   color: var(--accent) !important;
   border-bottom: 2px solid var(--accent) !important;
 }
@@ -355,106 +307,68 @@ input, select, textarea,
   padding: 16px !important;
 }
 
-/* ── 데이터프레임 / 테이블 ────────────────────── */
-[data-testid="stDataFrame"] iframe,
-[data-testid="stTable"] table {
-  border-radius: var(--radius-sm) !important;
-}
+/* 테이블 */
 th {
   background: var(--surface2) !important;
   color: var(--muted) !important;
-  font-size: 0.75rem !important;
+  font-size: 0.73rem !important;
+  font-weight: 600 !important;
   text-transform: uppercase !important;
-  letter-spacing: 0.05em !important;
-  text-align: center !important;
+  letter-spacing: 0.04em !important;
   border-bottom: 1px solid var(--border) !important;
 }
-td { color: var(--text) !important; }
+td { color: var(--text) !important; font-size: 0.85rem !important; }
 
-/* ── 알림/메시지 박스 ────────────────────────── */
+/* 알림 */
 [data-testid="stAlert"] {
-  border-radius: var(--radius-sm) !important;
-  border-left-width: 4px !important;
-  font-size: 0.88rem !important;
-}
-div[data-testid="stToast"] {
-  background: var(--surface2) !important;
-  border: 1px solid var(--border) !important;
-  border-left: 4px solid var(--accent) !important;
-  border-radius: var(--radius-sm) !important;
-  color: var(--text) !important;
+  border-radius: 8px !important;
+  border-left-width: 3px !important;
+  font-size: 0.86rem !important;
 }
 
-/* ── progress bar ────────────────────────────── */
+/* progress */
 [data-testid="stProgressBar"] > div > div {
-  background: var(--accent) !important;
-  border-radius: 99px !important;
+  background: var(--accent) !important; border-radius: 99px !important;
 }
 [data-testid="stProgressBar"] > div {
-  background: var(--surface2) !important;
-  border-radius: 99px !important;
-  height: 8px !important;
+  background: var(--surface2) !important; border-radius: 99px !important; height: 7px !important;
 }
 
-/* ── divider ─────────────────────────────────── */
 hr { border-color: var(--border) !important; }
 
-/* ── 위험도·공정성 커스텀 클래스 ─────────────── */
-.risk-high { color: var(--red)   !important; font-weight: 700 !important; }
-.risk-mid  { color: var(--amber) !important; font-weight: 700 !important; }
-.risk-low  { color: var(--green) !important; font-weight: 700 !important; }
-
-/* ── 운행 요약 카드 (dashboard용) ────────────── */
+/* truck card */
 .truck-card {
-  background: var(--surface2);
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 14px 18px;
   margin-bottom: 10px;
-  line-height: 1.7;
 }
 .truck-card-label {
-  font-size: 0.72rem;
-  font-weight: 700;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-size: 0.7rem; font-weight: 600;
+  color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em;
 }
-.truck-card-value {
-  font-family: var(--mono);
-  font-size: 0.9rem;
-  color: var(--text);
-}
+.truck-card-value { font-size: 0.9rem; color: var(--text); font-weight: 500; }
 
-/* ── 앱 타이틀 배지 ─────────────────────────── */
+/* 헤더 배지 */
 .lt-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 6px;
+  display: flex; align-items: center; gap: 10px;
+  padding-bottom: 6px; border-bottom: 1px solid var(--border); margin-bottom: 6px;
 }
 .lt-badge {
-  background: var(--accent-dk);
-  color: #fff;
-  font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  padding: 3px 8px;
-  border-radius: 99px;
-  text-transform: uppercase;
+  background: var(--accent); color: #fff;
+  font-size: 0.66rem; font-weight: 600;
+  letter-spacing: 0.08em; padding: 3px 8px;
+  border-radius: 99px; text-transform: uppercase;
 }
 
-/* ── 체크박스 ────────────────────────────────── */
-[data-baseweb="checkbox"] label span { color: var(--text) !important; }
-
-/* ── slider ──────────────────────────────────── */
-[data-testid="stSlider"] [data-testid="stTickBar"] {
-  color: var(--muted) !important;
-}
+/* 위험도 */
+.risk-high { color: var(--red)   !important; font-weight: 600 !important; }
+.risk-mid  { color: var(--amber) !important; font-weight: 600 !important; }
+.risk-low  { color: var(--green) !important; font-weight: 600 !important; }
 </style>
 """, unsafe_allow_html=True)
+
 
 _TRUCK_COLORS = ["#1E3A8A","#DC2626","#059669","#D97706",
                  "#7C3AED","#0891B2","#BE185D","#92400E","#065F46","#1D4ED8"]
@@ -566,86 +480,7 @@ def _detect_deadhead(res: dict) -> list[dict]:
 
 
 # ══════════════════════════════════════════════════════════════════════
-# D8. AI 재배차 어시스턴트 (대화형)
-# ══════════════════════════════════════════════════════════════════════
-_ASSISTANT_SYSTEM = """당신은 물류 배차 최적화 전문 AI 어시스턴트입니다.
-관리자가 배차 결과를 보며 질문하면 구체적이고 실행 가능한 개선 방안을 제시하세요.
-- 항상 한국어로 답변하세요.
-- 짧고 명확하게: 3~6문장 이내.
-- 수치가 있으면 반드시 인용하세요.
-- 모호한 질문에는 핵심만 짚어 답하세요."""
 
-def render_ai_assistant(res: dict) -> None:
-    """[D8] 대화형 AI 재배차 어시스턴트 패널"""
-    with st.expander("💬 AI 재배차 어시스턴트 (대화형)", expanded=False):
-        if not ANTHROPIC_API_KEY:
-            st.info("ANTHROPIC_API_KEY를 설정하면 AI 어시스턴트를 사용할 수 있습니다.")
-            return
-
-        st.caption("배차 결과를 보며 자유롭게 질문하세요. AI가 개선 방안을 제안합니다.")
-
-        # 대화 히스토리 표시
-        history: list[dict] = st.session_state._assistant_history
-        for msg in history:
-            role_icon = "🧑 관리자" if msg["role"] == "user" else "🤖 AI"
-            with st.chat_message(msg["role"]):
-                st.write(f"**{role_icon}**: {msg['content']}")
-
-        # 빠른 질문 버튼
-        st.markdown("**빠른 질문:**")
-        quick_cols = st.columns(3)
-        quick_questions = [
-            "가장 과부하된 차량은?",
-            "SLA 올리려면?",
-            "비용 줄이는 방법은?",
-        ]
-        for i, q in enumerate(quick_questions):
-            if quick_cols[i].button(q, key=f"quick_{i}", use_container_width=True):
-                st.session_state._assistant_quick = q
-
-        # 사용자 입력
-        user_input = st.chat_input("예: T2 차량 경로를 T1으로 옮기면 어떻게 되나요?")
-        if hasattr(st.session_state, "_assistant_quick"):
-            user_input = st.session_state._assistant_quick
-            del st.session_state._assistant_quick
-
-        if user_input:
-            # 컨텍스트 요약 (토큰 절약)
-            context = {
-                "차량별_요약": {
-                    k: {"stops": v.get("stops", 0), "dist": round(v.get("dist", 0), 1),
-                        "time_min": int(v.get("time", 0)), "load_pct": round(
-                            v.get("used_wt", 0) / max(v.get("max_wt", 1), 1) * 100, 1),
-                        "fatigue": _calc_fatigue(v), "fuel_cost": int(v.get("fuel_cost", 0))}
-                    for k, v in res.get("truck_stats", {}).items()
-                },
-                "SLA": res.get("sla", 100), "효율": res.get("efficiency", 0),
-                "미배차수": len(res.get("unassigned", [])),
-                "총비용": int(res.get("total_cost", 0)),
-            }
-            messages_to_send = history[-6:] + [  # 최근 6턴만 유지
-                {"role": "user", "content":
-                 f"[배차현황]\n{json.dumps(context, ensure_ascii=False)}\n\n질문: {user_input}"}
-            ]
-            with st.spinner("AI 분석 중..."):
-                answer = _call_anthropic(messages_to_send, system=_ASSISTANT_SYSTEM, max_tokens=400)
-
-            if answer:
-                st.session_state._assistant_history.append(
-                    {"role": "user", "content": user_input})
-                st.session_state._assistant_history.append(
-                    {"role": "assistant", "content": answer})
-                # 히스토리 최대 20턴 유지
-                if len(st.session_state._assistant_history) > 20:
-                    st.session_state._assistant_history = \
-                        st.session_state._assistant_history[-20:]
-                st.rerun()
-            else:
-                st.warning("AI 응답을 받지 못했습니다. 잠시 후 다시 시도하세요.")
-
-        if history and st.button("🗑️ 대화 초기화", use_container_width=True):
-            st.session_state._assistant_history = []
-            st.rerun()
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1489,7 +1324,7 @@ def render_driver_equity(res: dict) -> None:
             if eq["cv_dist"] > 0.25:
                 st.info(f"거리 불균형이 큽니다. 권역 클러스터링(D9)을 참고해 권역을 재조정하세요.")
             if eq["cv_fatigue"] > 0.25:
-                st.info("피로도 편차가 큽니다. 대화형 AI 어시스턴트(D8)에게 재배분 방안을 물어보세요.")
+                st.info("피로도 편차가 큽니다. 차량 배분을 조정해 보세요.")
 
         st.caption("CV(변동계수) = 표준편차/평균. 0에 가까울수록 균등 분배.")
 
@@ -1903,7 +1738,16 @@ def _render_queue_page() -> None:
                     on_click=lambda: st.session_state.update(_run_opt=True,_opt_in_progress=True),
                 )
         elif not hub_name:
-            st.warning("왼쪽 사이드바에서 허브(출발 거점)를 먼저 선택해주세요.")
+            st.markdown("""
+<div style="background:#1e1a0f;border:1px solid #854d0e;border-radius:8px;padding:12px 16px;
+    display:flex;align-items:center;gap:10px;">
+  <span style="font-size:1.2rem;">👈</span>
+  <div>
+    <div style="font-size:0.85rem;font-weight:600;color:#fbbf24;">허브(출발 거점)가 선택되지 않았습니다</div>
+    <div style="font-size:0.75rem;color:#92400e;margin-top:2px;">왼쪽 사이드바 STEP 1에서 거점을 등록하고, STEP 2에서 허브를 선택하세요.</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
         else:
             st.info("배송지를 추가하면 최적화 버튼이 활성화됩니다.")
 
@@ -1913,12 +1757,61 @@ def _render_queue_page() -> None:
     render_bulk_upload(st.session_state.db_data)
 
     if not st.session_state.targets:
-        st.info(
-            "**시작하는 방법**\n\n"
-            "1. 왼쪽 사이드바에서 허브(출발점)와 배송지를 등록하세요.\n"
-            "2. 위 **일괄 업로드** 또는 사이드바에서 배송지를 추가하세요.\n"
-            "3. 배송지가 추가되면 위 **배차 최적화 시작** 버튼이 활성화됩니다."
+        has_locations = bool(st.session_state.get("db_data"))
+        has_hub       = bool(st.session_state.get("start_node"))
+
+        def _card(num, title, desc, hint, done, active):
+            if done:
+                border = "#16a34a"; bg = "#052e16"; bg_circle = "#16a34a"; icon = "✓"
+                title_color = "#4ade80"; hint_color = "#4ade80"; desc_color = "#6b7280"
+            elif active:
+                border = "#3b82f6"; bg = "#172554"; bg_circle = "#2563eb"; icon = str(num)
+                title_color = "#93c5fd"; hint_color = "#60a5fa"; desc_color = "#94a3b8"
+            else:
+                border = "#1e293b"; bg = "#0d1117"; bg_circle = "#1e293b"; icon = str(num)
+                title_color = "#334155"; hint_color = "#1e293b"; desc_color = "#374151"
+            pulse = (
+                'box-shadow:0 0 0 3px rgba(59,130,246,0.2),0 0 16px rgba(59,130,246,0.1);'
+                if active else ""
+            )
+            return (
+                f'<div style="flex:1;background:{bg};border:1px solid {border};'
+                f'border-radius:12px;padding:16px;{pulse}">'
+                f'<div style="width:32px;height:32px;border-radius:50%;background:{bg_circle};'
+                f'color:#fff;font-weight:700;font-size:0.9rem;display:flex;align-items:center;'
+                f'justify-content:center;margin-bottom:10px;">{icon}</div>'
+                f'<div style="font-size:0.85rem;font-weight:600;color:{title_color};margin-bottom:4px;">{title}</div>'
+                f'<div style="font-size:0.75rem;color:{desc_color};line-height:1.5;">{desc}</div>'
+                f'<div style="font-size:0.7rem;color:{hint_color};margin-top:8px;font-weight:500;">{hint}</div>'
+                f'</div>'
+            )
+
+        arrow = '<div style="display:flex;align-items:center;color:#334155;font-size:1.2rem;padding:0 4px;">→</div>'
+
+        s1_done   = has_locations
+        s2_done   = has_locations and has_hub
+        s1_active = not s1_done
+        s2_active = s1_done and not s2_done
+        s3_active = s2_done
+
+        s1_hint = "등록 완료 ✓" if s1_done else "← 왼쪽 사이드바 CSV 업로드"
+        s2_hint = "완료 ✓" if s2_done else ("← 사이드바에서 허브·배송지 추가" if s1_done else "STEP 1 완료 후")
+        s3_hint = "배송지 추가 후 버튼 활성화"
+
+        card1 = _card(1, "거점·배송지 등록",  "CSV 파일 업로드로<br>한 번에 등록",          s1_hint, s1_done, s1_active)
+        card2 = _card(2, "허브 & 배송지 확인", "허브(출발점) 지정 후<br>배송 대기열 구성",   s2_hint, s2_done, s2_active)
+        card3 = _card(3, "최적화 실행",        "🚀 배차 최적화 시작<br>버튼 클릭",           s3_hint, False,   s3_active)
+
+        html = (
+            '<div style="max-width:660px;margin:24px auto;">'
+            '<div style="text-align:center;margin-bottom:20px;">'
+            '<div style="font-size:1.05rem;font-weight:600;color:#e2e8f0;">'
+            '처음 사용하시나요? 3단계로 시작하세요</div></div>'
+            '<div style="display:flex;gap:8px;align-items:stretch;">'
+            + card1 + arrow + card2 + arrow + card3 +
+            '</div></div>'
         )
+        st.markdown(html, unsafe_allow_html=True)
 
     if st.session_state.targets:
         try:    sh,sm=map(int,st.session_state.cfg_start_time.split(":"))
@@ -2020,8 +1913,7 @@ def _render_result_page() -> None:
     render_dashboard(res)
     st.divider()
 
-    # D8: 대화형 AI 어시스턴트
-    render_ai_assistant(res)
+    # D9~D14 이하 기능
 
     # D9: 배송권역 클러스터링
     render_cluster_analysis(res)
@@ -2085,87 +1977,10 @@ st.markdown("""
   <span style="font-size:1.65rem;font-weight:700;letter-spacing:-0.02em;">🚚 LogiTrack</span>
   <span class="lt-badge">배차 최적화</span>
 </div>
-<p style="color:#94a3b8;font-size:0.82rem;margin:0 0 16px 0;">
-  OR-Tools VRPTW 알고리즘 &nbsp;·&nbsp; Kakao 실측 경로 &nbsp;·&nbsp; 시간창·용량·온도 제약 동시 처리
+<p style="color:#94a3b8;font-size:0.82rem;margin:0 0 12px 0;">
+  실측 경로 최적화 &nbsp;·&nbsp; AI 어시스턴트 &nbsp;·&nbsp; 사전 예보 &nbsp;·&nbsp; 공정성 지수 &nbsp;·&nbsp; 권역 클러스터링
 </p>
 """, unsafe_allow_html=True)
-
-# ── 온보딩 (배송지가 없을 때만 표시) ──────────────────────────
-if not st.session_state.opt_result and not st.session_state.targets:
-    st.info(
-        "**LogiTrack은 물류 배차 최적화 시스템입니다.**\n\n"
-        "복수의 배송지·차량·시간 제약을 입력하면 OR-Tools가 최적 경로를 자동으로 계산합니다. "
-        "Kakao Mobility API로 실제 도로 거리와 통행료를 반영하며, 탄소 배출량·비용 명세·상차 순서까지 한 번에 제공합니다.",
-        icon="🚚"
-    )
-
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.markdown("""
-<div style="background:var(--background-color,#1e2130);border:1px solid #2d3250;border-radius:10px;padding:16px;">
-  <div style="font-size:1.4rem;margin-bottom:8px;">1️⃣</div>
-  <div style="font-weight:600;color:#e2e8f0;margin-bottom:6px;">거점 등록</div>
-  <div style="font-size:0.82rem;color:#94a3b8;line-height:1.6;">왼쪽 사이드바에서 허브(출발지)와 배송지 주소를 등록합니다.</div>
-</div>""", unsafe_allow_html=True)
-    with col2:
-        st.markdown("""
-<div style="background:var(--background-color,#1e2130);border:1px solid #2d3250;border-radius:10px;padding:16px;">
-  <div style="font-size:1.4rem;margin-bottom:8px;">2️⃣</div>
-  <div style="font-weight:600;color:#e2e8f0;margin-bottom:6px;">배송지 추가</div>
-  <div style="font-size:0.82rem;color:#94a3b8;line-height:1.6;">대기열에 배송지를 올리거나 CSV 파일을 일괄 업로드합니다.</div>
-</div>""", unsafe_allow_html=True)
-    with col3:
-        st.markdown("""
-<div style="background:var(--background-color,#1e2130);border:1px solid #2d3250;border-radius:10px;padding:16px;">
-  <div style="font-size:1.4rem;margin-bottom:8px;">3️⃣</div>
-  <div style="font-weight:600;color:#e2e8f0;margin-bottom:6px;">최적화 실행</div>
-  <div style="font-size:0.82rem;color:#94a3b8;line-height:1.6;">차량 대수·출발 시간을 설정하고 배차 최적화 버튼을 누릅니다.</div>
-</div>""", unsafe_allow_html=True)
-
-    st.markdown("<div style='margin:16px 0 4px 0;'></div>", unsafe_allow_html=True)
-
-    if st.button("📂 샘플 데이터로 바로 시작해보기", use_container_width=True):
-        sample_locations = [
-            {"name": "서울허브",     "lat": 37.5665, "lon": 126.9780, "addr": "서울특별시 중구 세종대로 110"},
-            {"name": "강남센터",     "lat": 37.5012, "lon": 127.0396, "addr": "서울특별시 강남구 테헤란로 152"},
-            {"name": "마포물류",     "lat": 37.5571, "lon": 126.9088, "addr": "서울특별시 마포구 월드컵북로 400"},
-            {"name": "성수창고",     "lat": 37.5444, "lon": 127.0557, "addr": "서울특별시 성동구 성수이로 78"},
-            {"name": "여의도센터",   "lat": 37.5219, "lon": 126.9245, "addr": "서울특별시 영등포구 국제금융로 10"},
-            {"name": "송파물류",     "lat": 37.5145, "lon": 127.1059, "addr": "서울특별시 송파구 올림픽로 300"},
-        ]
-        sample_targets = [
-            {"name": "강남센터",   "lat": 37.5012, "lon": 127.0396, "addr": "서울특별시 강남구 테헤란로 152",
-             "weight": 400, "volume": 2.0, "temperature": "냉장", "unload_method": "수작업",
-             "difficulty": "보안아파트 (+10분)", "priority": "VIP", "tw_type": "Hard",
-             "tw_start": 30, "tw_end": 240, "tw_disp": "09:30~13:00", "memo": "오전 배송 필수", "_node_uid": "s1"},
-            {"name": "마포물류",   "lat": 37.5571, "lon": 126.9088, "addr": "서울특별시 마포구 월드컵북로 400",
-             "weight": 300, "volume": 1.5, "temperature": "상온", "unload_method": "수작업",
-             "difficulty": "일반 (+0분)", "priority": "일반", "tw_type": "Soft",
-             "tw_start": 0, "tw_end": 540, "tw_disp": "09:00~18:00", "memo": "", "_node_uid": "s2"},
-            {"name": "성수창고",   "lat": 37.5444, "lon": 127.0557, "addr": "서울특별시 성동구 성수이로 78",
-             "weight": 700, "volume": 3.5, "temperature": "상온", "unload_method": "지게차",
-             "difficulty": "일반 (+0분)", "priority": "일반", "tw_type": "Soft",
-             "tw_start": 0, "tw_end": 480, "tw_disp": "09:00~17:00", "memo": "지게차 대기", "_node_uid": "s3"},
-            {"name": "여의도센터", "lat": 37.5219, "lon": 126.9245, "addr": "서울특별시 영등포구 국제금융로 10",
-             "weight": 250, "volume": 1.2, "temperature": "냉장", "unload_method": "수작업",
-             "difficulty": "보안아파트 (+10분)", "priority": "VIP", "tw_type": "Hard",
-             "tw_start": 30, "tw_end": 180, "tw_disp": "09:30~12:00", "memo": "방문증 필요", "_node_uid": "s4"},
-            {"name": "송파물류",   "lat": 37.5145, "lon": 127.1059, "addr": "서울특별시 송파구 올림픽로 300",
-             "weight": 500, "volume": 2.5, "temperature": "상온", "unload_method": "지게차",
-             "difficulty": "일반 (+0분)", "priority": "여유", "tw_type": "Soft",
-             "tw_start": 240, "tw_end": 540, "tw_disp": "13:00~18:00", "memo": "오후 배송", "_node_uid": "s5"},
-        ]
-        if not st.session_state.db_data:
-            st.session_state.db_data = sample_locations
-        if not st.session_state.start_node:
-            st.session_state.start_node = "서울허브"
-        st.session_state.targets = sample_targets
-        st.session_state.cfg_1t_cnt = 2
-        st.session_state.cfg_2t_cnt = 1
-        st.session_state.cfg_5t_cnt = 0
-        st.rerun()
-
-    st.divider()
 
 if not st.session_state.opt_result:
     _render_queue_page()
