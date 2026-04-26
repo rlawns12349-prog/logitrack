@@ -9,11 +9,18 @@ Solomon(1987) 벤치마크로 OR-Tools VRPTW 솔버 품질 검증.
   - main(): 미해결 인스턴스와 해결 인스턴스를 분리 집계
   - _gap_tag 로직 단순화
   - 타입 힌팅 완전 적용
+
+v2 추가 개선:
+  - run_tradeoff_sweep(): time_limit별 Gap/시간 트레이드오프 곡선 측정 함수 추가
+    → 운영 시 time_limit 튜닝 근거로 활용
+  - C101_25 서브셋 추가: 전체(100노드)와 부분(25노드) 비교로 스케일링 특성 파악
+  - main(): --sweep 플래그 지원 (sys.argv 기반)
 """
 from __future__ import annotations
 
 import csv
 import math
+import sys
 import time
 from typing import NamedTuple, Optional
 
@@ -98,10 +105,18 @@ RC101_25 = [
     [25,35,25,10,76,86,10],
 ]
 
+
+# C101 앞 25노드 서브셋 — 전체(100노드)와 스케일링 특성 비교용
+C101_25 = C101_NODES[:26]  # 허브(0) + 고객 25명
+
 INSTANCES: dict[str, dict] = {
     "C101 (100고객, Hard TW)": {
         "nodes": C101_NODES, "vehicle_capacity": 200, "max_vehicles": 25,
         "bks_vehicles": 10,  "bks_distance": 828.94, "soft_tw": False,
+    },
+    "C101 (25고객 서브셋, Hard TW)": {
+        "nodes": C101_25,    "vehicle_capacity": 200, "max_vehicles": 25,
+        "bks_vehicles": 3,   "bks_distance": 191.30, "soft_tw": False,
     },
     "R101 (25고객, Soft TW)": {
         "nodes": R101_25,   "vehicle_capacity": 200, "max_vehicles": 25,
@@ -224,13 +239,72 @@ def _gap_tag(gap: float) -> str:
     return "❌"
 
 
+def run_tradeoff_sweep(
+    time_limits: list[int] = (5, 10, 20, 30, 60),
+) -> None:
+    """time_limit별 Gap/시간 트레이드오프 곡선을 측정·출력.
+
+    각 time_limit 값에 대해 모든 INSTANCES를 풀고 평균 Gap과 총 소요 시간을
+    표로 출력한다. 운영 환경에서 적정 time_limit 설정의 근거로 활용한다.
+
+    Args:
+        time_limits: 측정할 제한 시간(초) 목록
+    """
+    print(f"\n{'='*70}")
+    print(f"  Gap / 시간 트레이드오프 스윕")
+    print(f"  인스턴스: {', '.join(INSTANCES.keys())}")
+    print(f"{'='*70}")
+    print(f"{'제한(s)':>8}{'평균Gap':>10}{'최대Gap':>10}{'미해결':>8}{'총시간':>8}")
+    print(f"{'-'*70}")
+
+    sweep_rows: list[dict] = []
+    for tl in time_limits:
+        gaps:         list[float] = []
+        unsolved:     int         = 0
+        total_elapsed: float      = 0.0
+
+        for name, inst in INSTANCES.items():
+            r = solve(inst, tl)
+            total_elapsed += r.elapsed
+            if r.total_dist is None:
+                unsolved += 1
+            else:
+                gap = (r.total_dist - inst["bks_distance"]) / inst["bks_distance"] * 100
+                gaps.append(gap)
+
+        avg_gap = sum(gaps) / len(gaps) if gaps else float("nan")
+        max_gap = max(gaps)              if gaps else float("nan")
+        print(f"{tl:>8}{avg_gap:>+9.2f}%{max_gap:>+9.2f}%{unsolved:>8}{total_elapsed:>7.1f}s")
+        sweep_rows.append({
+            "제한(s)": tl, "평균Gap(%)": round(avg_gap, 2),
+            "최대Gap(%)": round(max_gap, 2),
+            "미해결": unsolved, "총시간(s)": round(total_elapsed, 1),
+        })
+
+    print(f"{'='*70}\n")
+
+    sweep_path = "benchmark_sweep.csv"
+    with open(sweep_path, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.DictWriter(f, fieldnames=sweep_rows[0].keys())
+        w.writeheader()
+        w.writerows(sweep_rows)
+    print(f"  스윕 결과 저장: {sweep_path}\n")
+
+
 def main() -> None:
-    """벤치마크 실행 및 결과 출력·저장."""
+    """벤치마크 실행 및 결과 출력·저장.
+
+    사용법:
+        python solomon_benchmark.py          # 기본 벤치마크
+        python solomon_benchmark.py --sweep  # 트레이드오프 스윕 추가 실행
+    """
+    do_sweep = "--sweep" in sys.argv
+
     print(f"\n{'='*74}")
     print(f"  LogiTrack OR-Tools VRPTW — Solomon Benchmark (제한시간: {_TIME_LIMIT_SEC}초)")
     print(f"  BKS 출처: SINTEF / Solomon(1987)")
     print(f"{'='*74}")
-    print(f"{'인스턴스':<28}{'BKS 차량':>8}{'결과':>6}{'BKS 거리':>10}{'결과 거리':>10}{'Gap':>8}{'시간':>6}")
+    print(f"{'인스턴스':<30}{'BKS 차량':>8}{'결과':>6}{'BKS 거리':>10}{'결과 거리':>10}{'Gap':>8}{'시간':>6}")
     print(f"{'-'*74}")
 
     rows:         list[dict]  = []
@@ -244,7 +318,7 @@ def main() -> None:
 
         if result.total_dist is None:
             unsolved_cnt += 1
-            print(f"{name:<28}{bks_v:>8}{'N/A':>6}{bks_d:>10.2f}{'N/A':>10}{'N/A':>8}{result.elapsed:>5}s  ❌미해결")
+            print(f"{name:<30}{bks_v:>8}{'N/A':>6}{bks_d:>10.2f}{'N/A':>10}{'N/A':>8}{result.elapsed:>5}s  ❌미해결")
             rows.append({
                 "인스턴스": name, "BKS차량": bks_v, "결과차량": "N/A",
                 "BKS거리": bks_d, "결과거리": "N/A", "Gap(%)": "N/A",
@@ -255,7 +329,7 @@ def main() -> None:
             solved_gaps.append(gap)
             tag = _gap_tag(gap)
             print(
-                f"{name:<28}{bks_v:>8}{result.veh_used:>6}"
+                f"{name:<30}{bks_v:>8}{result.veh_used:>6}"
                 f"{bks_d:>10.2f}{result.total_dist:>10.2f}{gap:>+7.1f}%"
                 f"{result.elapsed:>5}s  {tag}"
             )
@@ -290,6 +364,9 @@ def main() -> None:
         print(f"\n  결과 저장: {_CSV_OUTPUT_PATH}")
 
     print(f"{'='*74}\n")
+
+    if do_sweep:
+        run_tradeoff_sweep(time_limits=[5, 10, 20, 30, 60])
 
 
 if __name__ == "__main__":

@@ -4,10 +4,15 @@ routing.py — 경로 API 및 실측 매트릭스
 개선 사항:
   - 타입 힌팅 전면 적용
   - fetch_route_core: 재시도 간격을 지수 백오프(1.0→2.0→4.0s)로 정규화,
-    429(Rate Limit) 응답 시에도 동일 백오프 적용 (원본은 pass만 하고 sleep 없음)
+    429(Rate Limit) 응답 시에도 동일 백오프 적용
   - 빈 routes 응답을 폴백 없이 break하던 로직 → 명시적 조건 분기
   - build_real_time_matrix: pair_index_list 생성 인덱스 오류 방어
   - 모든 공개 함수 docstring 추가
+
+v2 추가 개선:
+  - build_real_time_matrix: asyncio.gather에 return_exceptions=True 적용
+    → 배치 내 일부 실패 시 해당 페어만 Manhattan 폴백, 나머지 정상 처리
+  - fetch_route_core: DB 캐시 raw_time 누락 시 안전한 폴백 처리 강화
 """
 from __future__ import annotations
 
@@ -120,8 +125,15 @@ async def fetch_route_core(
     # 2) DB 캐시
     db_cache = db.get_route_cache(cache_key)
     if db_cache:
-        if "raw_time" not in db_cache:
-            db_cache["raw_time"] = db_cache.get("time", 0)
+        # raw_time 누락 시 time으로 보정, 그것도 없으면 Manhattan 추정으로 재계산
+        if "raw_time" not in db_cache or db_cache["raw_time"] is None:
+            fallback_t = db_cache.get("time")
+            if not fallback_t:
+                d_km       = manhattan_distance(curr["lat"], curr["lon"], dest["lat"], dest["lon"])
+                spd        = get_dynamic_speed(dest["lat"], dest["lon"], speed, congestion_penalty, 1.0)
+                fallback_t = (d_km / spd) * 60 if spd > 0 else 0.0
+                logger.debug("fetch_route: DB 캐시 raw_time 없음 — Manhattan 재계산 %.1f분", fallback_t)
+            db_cache["raw_time"] = fallback_t
         api_cache.set(cache_key, db_cache)
         r = db_cache.copy()
         r["from"] = curr["name"]
@@ -285,21 +297,41 @@ async def build_real_time_matrix(
 
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as sess:
         for start in range(0, len(node_pairs), _BATCH_SIZE):
-            chunk   = node_pairs[start : start + _BATCH_SIZE]
-            chunk_r = await asyncio.gather(*[
+            chunk        = node_pairs[start : start + _BATCH_SIZE]
+            chunk_idx    = idx_pairs[start : start + _BATCH_SIZE]
+            raw_results  = await asyncio.gather(*[
                 fetch_route_core(
                     sess, c, d,
                     speed, congestion_penalty, weather_factor,
                     kakao_key, api_cache, db,
                 )
                 for c, d in chunk
-            ])
-            results.extend(chunk_r)
+            ], return_exceptions=True)
+
+            # 예외 발생 페어는 개별 Manhattan 폴백으로 대체
+            for k, res in enumerate(raw_results):
+                if isinstance(res, Exception):
+                    c, d = chunk[k]
+                    logger.warning(
+                        "build_real_time_matrix: 페어 %s→%s 실패(%s), Manhattan 폴백 적용",
+                        c.get("name"), d.get("name"), res,
+                    )
+                    d_km  = manhattan_distance(c["lat"], c["lon"], d["lat"], d["lon"])
+                    spd   = get_dynamic_speed(d["lat"], d["lon"], speed, congestion_penalty, weather_factor)
+                    raw_t = (d_km / spd) * 60 if spd > 0 else 0.0
+                    raw_results[k] = {
+                        "from": c["name"], "to": d["name"],
+                        "dist": d_km, "raw_time": raw_t, "time": raw_t,
+                        "toll": 0,
+                        "path": [[c["lat"], c["lon"]], [d["lat"], d["lon"]]],
+                        "is_fallback": True,
+                    }
+            results.extend(raw_results)
             await asyncio.sleep(_BATCH_DELAY)
 
     for k, res in enumerate(results):
         i, j = idx_pairs[k]
-        travel_time_matrix[i][j] = int(res["time"] * rush_mults[j])  # 미리 계산된 값 사용
+        travel_time_matrix[i][j] = int(res["time"] * rush_mults[j])
         real_dist_matrix[i][j]   = res["dist"]
         real_toll_matrix[i][j]   = res.get("toll", 0)
 

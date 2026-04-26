@@ -7,6 +7,11 @@ geo.py — 공간/물리 유틸리티
   - get_dynamic_fuel_consumption: kmpl 계산 분기를 명확히 분리
   - LRUCache.__contains__: 접근 시 LRU 순서 갱신 동작을 docstring에 명시
   - 타입 힌팅 완전 적용 (from __future__ import annotations)
+
+v2 추가 개선:
+  - get_dynamic_fuel_consumption: segment_speed 파라미터 추가
+    고속(>60km/h) +10% 연비, 저속(<20km/h) -15% 연비 보정
+    미제공 시 기존 동작 유지 (하위 호환)
 """
 from __future__ import annotations
 
@@ -173,20 +178,26 @@ def _get_vehicle_spec(vehicle_type: str) -> tuple[float, float]:
 
 
 def get_dynamic_fuel_consumption(
-    vehicle_type: str,
-    payload_kg:   float,
-    dist_km:      float,
-    is_deadhead:  bool = False,
+    vehicle_type:   str,
+    payload_kg:     float,
+    dist_km:        float,
+    is_deadhead:    bool  = False,
+    segment_speed:  Optional[float] = None,
 ) -> float:
     """실측 연료 소비량 (L).
 
-    개선: deadhead와 적재 분기를 명확히 분리해 가독성 향상.
+    v2 개선: segment_speed 파라미터 추가 — 고속도로/시내 구간 구분
+        - 60km/h 초과: 고속 구간 → 연비 10% 향상 (엔진 효율 증가)
+        - 20km/h 미만: 저속/정체 → 연비 15% 저하 (공회전 손실)
+        - 그 외: 기본 연비 적용
+        segment_speed 미제공 시 기존 로직과 동일하게 동작 (하위 호환).
 
     Args:
-        vehicle_type: 차량 타입 ("1톤", "2.5톤", "5톤" 포함)
-        payload_kg:   적재 중량 (kg), 음수 → 0으로 보정
-        dist_km:      이동 거리 (km), 음수 → 0으로 보정
-        is_deadhead:  공차 복귀 여부
+        vehicle_type:  차량 타입 ("1톤", "2.5톤", "5톤" 포함)
+        payload_kg:    적재 중량 (kg), 음수 → 0으로 보정
+        dist_km:       이동 거리 (km), 음수 → 0으로 보정
+        is_deadhead:   공차 복귀 여부
+        segment_speed: 구간 실효 속도 (km/h). None이면 속도 보정 없음.
 
     Returns:
         연료 소비량 (L)
@@ -201,6 +212,15 @@ def get_dynamic_fuel_consumption(
     else:
         drop = (payload_kg / 1000.0) * drop_coeff
         kmpl = base_kmpl * (1.0 - min(vehicle_specs.MAX_FUEL_DROP_RATIO, drop))
+
+    # 구간 속도 기반 연비 보정
+    if segment_speed is not None and segment_speed > 0:
+        if segment_speed > 60.0:
+            # 고속 구간: 엔진 효율 향상 → 연비 10% 개선
+            kmpl *= 1.10
+        elif segment_speed < 20.0:
+            # 저속/정체 구간: 공회전 손실 → 연비 15% 저하
+            kmpl *= 0.85
 
     return dist_km / kmpl if kmpl > 0.0 else 0.0
 
