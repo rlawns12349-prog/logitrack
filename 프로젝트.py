@@ -680,6 +680,32 @@ def _map_columns(df: pd.DataFrame) -> dict[str, str]:
                 mapping[key] = cols_lower[n]; break
     return mapping
 
+def _find_header_row(df: pd.DataFrame, max_scan: int = 10) -> pd.DataFrame:
+    """상단 설명/메타 행이 있는 파일에서 실제 헤더 행을 자동 탐색.
+
+    _COL_ALIASES 키워드가 하나라도 포함된 행을 헤더로 재지정한다.
+    찾지 못하면 원본 df를 그대로 반환.
+    """
+    # 컬럼이 모두 문자열일 때만 _map_columns 체크 (int 컬럼이면 스캔으로 진행)
+    if all(isinstance(c, str) for c in df.columns) and "name" in _map_columns(df):
+        return df
+
+    all_aliases = {
+        alias.lower().replace(" ", "").replace("(", "").replace(")", "")
+        for aliases in _COL_ALIASES.values()
+        for alias in aliases
+    }
+    for i in range(min(max_scan, len(df))):
+        row_vals = [
+            str(v).lower().replace(" ", "").replace("(", "").replace(")", "")
+            for v in df.iloc[i].values
+        ]
+        if any(v in all_aliases for v in row_vals):
+            new_df = df.iloc[i + 1:].copy()
+            new_df.columns = [str(v) for v in df.iloc[i].values]
+            return new_df.reset_index(drop=True)
+    return df
+
 def _parse_tw(tw_str: str, default: str = "09:00~18:00") -> str:
     if not tw_str or str(tw_str).strip() in ("", "nan", "None"):
         return default
@@ -722,6 +748,11 @@ def render_bulk_upload(db_data: list[dict]) -> None:
         if raw_df is None or raw_df.empty:
             return
 
+        # 상단에 설명·메타 행이 있는 파일도 헤더를 자동 탐색해 재구성
+        raw_df = _find_header_row(raw_df)
+        if raw_df.empty:
+            return
+
         col_map = _map_columns(raw_df)
         if "name" not in col_map:
             col_map["name"] = raw_df.columns[0]
@@ -733,12 +764,12 @@ def render_bulk_upload(db_data: list[dict]) -> None:
         # 루프 진입 전 set으로 한 번만 만들어 O(1) 중복 검사
         existing_names: set[str] = {t["name"] for t in st.session_state.targets}
 
-        for row_num, (_, row) in enumerate(raw_df.iterrows(), start=2):
+        for idx, row in raw_df.iterrows():
             name = str(row.get(col_map.get("name", ""), "")).strip()
             if not name or name.lower() == "nan":
-                errors.append(f"행 {row_num}: 배송지 이름 없음"); continue
+                errors.append(f"행 {idx+2}: 배송지 이름 없음"); continue
             if name not in db_names:
-                errors.append(f"행 {row_num}: '{name}' — DB에 없는 거점"); continue
+                errors.append(f"행 {idx+2}: '{name}' — DB에 없는 거점"); continue
             if name in existing_names:
                 skipped_dup.append(name); continue
 
