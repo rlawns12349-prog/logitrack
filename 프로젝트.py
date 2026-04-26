@@ -738,7 +738,7 @@ def render_bulk_upload(db_data: list[dict]) -> None:
             if not name or name.lower() == "nan":
                 errors.append(f"행 {idx+2}: 배송지 이름 없음"); continue
             if name not in db_names:
-                errors.append("행 " + str(idx+2) + ": " + name + " — DB에 없는 거점"); continue
+                errors.append("행 " + str(idx+2) + ": " + name + " - DB에 없는 거점"); continue
             if name in existing_names:
                 skipped_dup.append(name); continue
 
