@@ -7,16 +7,6 @@
   - D10~D14 분석 기능        → features/analytics.py   (규칙 기반 예보 개선 포함)
   - 사이드바                 → ui/sidebar.py            (컬럼 인덱스 캐싱 개선)
   - 이 파일에는 앱 초기화·레이아웃·UI 라우팅만 남김
-
-v2 버그 수정 및 보완:
-  - render_bulk_upload: f-string 따옴표 충돌(TypeError) 수정 (741번째 줄)
-  - render_bulk_upload: _get() 함수가 루프 내에서 매 iteration 재정의되는 클로저 버그 수정
-  - render_bulk_upload: start_offset·db_node_map을 루프 밖으로 이동해 불필요한 반복 연산 제거
-  - render_learning_warning: res dict 대신 session_state에서 이전 값 읽도록 수정 (항상 -1 반환 버그)
-    + 현재 실행 결과를 session_state에 저장해 다음 실행 비교 기준으로 활용
-  - _call_anthropic: 포괄적 except 대신 HTTPError/URLError/파싱 오류를 분리 처리
-  - _detect_deadhead: AttributeError/TypeError도 처리하도록 예외 범위 확장
-  - render_dispatch_sheet: 운행지시서에 차량 수·총 비용·CO₂ 요약 추가
 """
 
 import sys, os, json, io, re, csv
@@ -502,7 +492,6 @@ def _call_anthropic(messages: list[dict], system: str = "", max_tokens: int = 50
     if not ANTHROPIC_API_KEY:
         return ""
     import urllib.request
-    import urllib.error
     body: dict[str, Any] = {
         "model": "claude-haiku-4-5-20251001",
         "max_tokens": max_tokens,
@@ -520,15 +509,9 @@ def _call_anthropic(messages: list[dict], system: str = "", max_tokens: int = 50
         )
         with urllib.request.urlopen(req, timeout=15) as resp:
             return json.loads(resp.read())["content"][0]["text"].strip()
-    except urllib.error.HTTPError as e:
-        logger.warning("Anthropic HTTP 오류 %d: %s", e.code, e.reason)
-    except urllib.error.URLError as e:
-        logger.warning("Anthropic 연결 실패: %s", e.reason)
-    except (KeyError, IndexError, json.JSONDecodeError) as e:
-        logger.warning("Anthropic 응답 파싱 실패: %s", e)
     except Exception as e:
-        logger.warning("Anthropic 호출 실패 (예상치 못한 오류): %s", e)
-    return ""
+        logger.warning("Anthropic 호출 실패: %s", e)
+        return ""
 
 
 # ══════════════════════════════════════════════
@@ -587,13 +570,11 @@ def _detect_deadhead(res: dict) -> list[dict]:
     for row in res.get("report", []):
         if "(복귀)" not in row.get("거점", ""): continue
         try:
-            dist_str = str(row.get("거리", "0")).replace("km", "").replace("⚠️", "").strip()
-            d = float(dist_str)
+            d = float(row.get("거리", "0").replace("km","").replace("⚠️","").strip())
             if d >= 30:
                 out.append({"truck": row["트럭"], "km": d,
                             "msg": f"{row['트럭']}: 복귀 {d:.1f}km — 귀로 픽업 또는 인근 환적 고려"})
-        except (ValueError, AttributeError, TypeError):
-            pass
+        except ValueError: pass
     return out
 
 
@@ -629,12 +610,8 @@ def render_scenario_panel(res: dict) -> None:
 # ══════════════════════════════════════════════
 
 def render_learning_warning(res: dict) -> None:
-    # 이전 실행 값은 res dict가 아닌 session_state에서 읽어야 함
-    # res dict에는 _prev_sla/_prev_eff 키가 없으므로 항상 -1.0이 반환되는 버그 수정
-    prev_sla = st.session_state.get("_prev_sla", -1.0)
-    prev_eff = st.session_state.get("_prev_eff", -1.0)
-    curr_sla = res.get("sla", 100)
-    curr_eff = res.get("efficiency", 0)
+    prev_sla = res.get("_prev_sla", -1.0); prev_eff = res.get("_prev_eff", -1.0)
+    curr_sla = res.get("sla", 100);         curr_eff = res.get("efficiency", 0)
     if prev_sla < 0: return
     msgs = []
     if curr_sla < prev_sla - 5:
@@ -644,9 +621,6 @@ def render_learning_warning(res: dict) -> None:
     if msgs:
         with st.expander("🧠 이전 실행 대비 분석", expanded=True):
             for m in msgs: st.warning(m)
-    # 현재 값을 세션에 저장해 다음 실행 비교 기준으로 사용
-    st.session_state["_prev_sla"] = curr_sla
-    st.session_state["_prev_eff"] = curr_eff
 
 
 # ══════════════════════════════════════════════
@@ -660,11 +634,9 @@ def render_dispatch_sheet(res: dict) -> None:
         t = row["트럭"]
         if t not in trucks: trucks[t] = []
         trucks[t].append(row)
-    total_cost = res.get("total_cost", 0)
     lines = ["="*60,
              f"LogiTrack 운행지시서  |  {datetime.now().strftime('%Y-%m-%d %H:%M')}",
              f"허브: {res.get('hub_name','-')}  |  총거리: {res.get('dist',0):.1f}km  |  SLA: {res.get('sla',0):.1f}%",
-             f"차량 수: {len(trucks)}대  |  총 비용: ₩{int(total_cost):,}  |  CO₂: {res.get('co2_total',0):.1f}kg",
              "="*60, ""]
     for truck, rows in trucks.items():
         lines += [f"▶ {truck}", "-"*40]
@@ -761,42 +733,35 @@ def render_bulk_upload(db_data: list[dict]) -> None:
         # 루프 진입 전 set으로 한 번만 만들어 O(1) 중복 검사
         existing_names: set[str] = {t["name"] for t in st.session_state.targets}
 
-        # 출발 오프셋을 루프 밖에서 한 번만 계산
-        try:
-            _sh, _sm = map(int, st.session_state.cfg_start_time.split(":"))
-        except ValueError:
-            _sh, _sm = 9, 0
-        _so = _sh * 60 + _sm
-
-        # db_data를 dict로 인덱싱해 루프 내 O(n) 선형탐색 제거
-        db_node_map: dict[str, dict] = {d["name"]: d for d in db_data}
-
         for idx, row in raw_df.iterrows():
             name = str(row.get(col_map.get("name", ""), "")).strip()
             if not name or name.lower() == "nan":
                 errors.append(f"행 {idx+2}: 배송지 이름 없음"); continue
             if name not in db_names:
-                errors.append("행 {}: \"{}\" — DB에 없는 거점".format(idx + 2, name)); continue
+                errors.append("행 " + str(idx+2) + ": " + name + " — DB에 없는 거점"); continue
             if name in existing_names:
                 skipped_dup.append(name); continue
 
-            # _get을 루프 밖 일반 함수로 분리해 클로저 재생성 방지
-            def _get_val(key: str, default: Any = "", _row: Any = row, _cm: dict = col_map) -> str:
-                col = _cm.get(key)
-                return str(_row.get(col, default)).strip() if col else str(default)
+            def _get(key: str, default: Any = "") -> str:
+                col = col_map.get(key)
+                return str(row.get(col, default)).strip() if col else str(default)
 
-            try:    weight = float(_get_val("weight", 0))
+            try:    weight = float(_get("weight", 0))
             except: weight = 0.0
-            try:    volume = float(_get_val("volume", 0))
+            try:    volume = float(_get("volume", 0))
             except: volume = 0.0
 
-            raw_temp = _get_val("temperature", "상온")
+            raw_temp = _get("temperature", "상온")
             temp = ("냉동" if "냉동" in raw_temp else "냉장" if "냉장" in raw_temp else "상온")
-            raw_pri  = _get_val("priority", "일반")
+            raw_pri  = _get("priority", "일반")
             priority = ("VIP" if "vip" in raw_pri.lower() else "여유" if "여유" in raw_pri else "일반")
-            tw_disp  = _parse_tw(_get_val("tw_disp", "09:00~18:00"))
+            tw_disp  = _parse_tw(_get("tw_disp", "09:00~18:00"))
 
-            so = _so
+            try:
+                sh, sm = map(int, st.session_state.cfg_start_time.split(":"))
+            except ValueError:
+                sh, sm = 9, 0
+            so = sh * 60 + sm
             try:
                 ts, te   = tw_disp.split("~")
                 tw_start = max(0, int(ts[:2]) * 60 + int(ts[3:]) - so)
@@ -804,16 +769,16 @@ def render_bulk_upload(db_data: list[dict]) -> None:
             except (ValueError, IndexError):
                 tw_start, tw_end = 0, 540
 
-            db_node = db_node_map.get(name)
+            db_node = next((d for d in db_data if d["name"] == name), None)
             valid_rows.append({
                 **(db_node or {}),
                 "name": name, "weight": weight, "volume": volume,
                 "temperature": temp, "priority": priority,
                 "tw_disp": tw_disp, "tw_start": tw_start, "tw_end": tw_end,
                 "tw_type": "Hard",
-                "unload_method": _get_val("unload_method", "수작업"),
-                "difficulty":    _get_val("difficulty",    "일반 (+0분)"),
-                "memo":          _get_val("memo",          ""),
+                "unload_method": _get("unload_method", "수작업"),
+                "difficulty":    _get("difficulty",    "일반 (+0분)"),
+                "memo":          _get("memo",          ""),
             })
 
         st.markdown(
