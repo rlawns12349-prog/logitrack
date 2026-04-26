@@ -734,12 +734,12 @@ def render_bulk_upload(db_data: list[dict]) -> None:
         existing_names: set[str] = {t["name"] for t in st.session_state.targets}
 
         for idx, row in raw_df.iterrows():
-            raw_name = row.get(col_map.get("name", ""), "")
-            name = str(raw_name).strip() if raw_name is not None else ""
+            name = str(row.get(col_map.get("name", ""), "")).strip()
+            row_num = int(idx) + 2  # iterrows() 인덱스가 str일 수 있으므로 int() 캐스팅
             if not name or name.lower() == "nan":
-                errors.append("행 " + str(idx+2) + ": 배송지 이름 없음"); continue
+                errors.append(f"행 {row_num}: 배송지 이름 없음"); continue
             if name not in db_names:
-                errors.append("행 " + str(idx+2) + ": " + name + " - DB에 없는 거점"); continue
+                errors.append(f"행 {row_num}: '{name}' — DB에 없는 거점"); continue
             if name in existing_names:
                 skipped_dup.append(name); continue
 
