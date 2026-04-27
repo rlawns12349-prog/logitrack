@@ -694,8 +694,154 @@ def _parse_tw(tw_str: str, default: str = "09:00~18:00") -> str:
         return f"{sh:02d}:{sm:02d}~{eh:02d}:{em:02d}"
     return default
 
+def _geocode_address(address: str, kakao_key: str) -> tuple:
+    """Kakao Local API로 주소 → (lat, lon, formatted_addr, err) 변환."""
+    import requests as _req
+    headers = {"Authorization": f"KakaoAK {kakao_key}"}
+    for url in [
+        "https://dapi.kakao.com/v2/local/search/keyword.json",
+        "https://dapi.kakao.com/v2/local/search/address.json",
+    ]:
+        try:
+            res = _req.get(url, headers=headers, params={"query": address}, timeout=5)
+            if res.status_code == 200:
+                docs = res.json().get("documents", [])
+                if docs:
+                    d = docs[0]
+                    best = d.get("place_name") or d.get("road_address_name") or d.get("address_name")
+                    return float(d["y"]), float(d["x"]), best, None
+        except Exception:
+            pass
+    return None, None, None, "주소 변환 실패"
+
+
+def render_location_bulk_register(db_data: list[dict], kakao_key: str) -> None:
+    """CSV로 거점을 일괄 등록하는 패널 (주소 → Kakao 지오코딩 → DB insert)."""
+    with st.expander("🗺️ 거점 일괄 등록 (CSV)", expanded=False):
+        st.caption(
+            "**필수 컬럼:** `name`(거점명), `address`(주소)  |  "
+            "주소를 Kakao API로 자동 변환해 DB에 등록합니다."
+        )
+
+        # 샘플 CSV 다운로드
+        sample_csv = "name,address\n강남 물류센터,서울 강남구 테헤란로 152\n홍대 편의점,서울 마포구 홍대입구역 1번출구\n"
+        st.download_button(
+            "📄 샘플 CSV 다운로드",
+            data=sample_csv,
+            file_name="거점_등록_양식.csv",
+            mime="text/csv",
+            key="loc_sample_dl",
+        )
+
+        tab_lf, tab_lp = st.tabs(["📂 파일 업로드", "📋 텍스트 붙여넣기"])
+        loc_df: pd.DataFrame | None = None
+
+        with tab_lf:
+            loc_up = st.file_uploader("CSV 또는 XLSX", type=["csv", "xlsx"], key="loc_bulk_file")
+            if loc_up:
+                try:
+                    loc_df = pd.read_excel(loc_up, dtype=str) if loc_up.name.endswith(".xlsx") \
+                             else pd.read_csv(loc_up, dtype=str, comment="#", on_bad_lines="skip")
+                except Exception as e:
+                    st.error(f"파일 읽기 실패: {e}")
+
+        with tab_lp:
+            loc_pasted = st.text_area(
+                "탭/쉼표 구분 데이터 붙여넣기 (첫 행 헤더)",
+                height=120, key="loc_bulk_paste",
+                placeholder="name,address\n강남 물류센터,서울 강남구 테헤란로 152",
+            )
+            if loc_pasted.strip():
+                try:
+                    sep    = "\t" if "\t" in loc_pasted else ","
+                    loc_df = pd.read_csv(io.StringIO(loc_pasted), sep=sep, dtype=str, on_bad_lines="skip")
+                except Exception as e:
+                    st.error(f"파싱 실패: {e}")
+
+        if loc_df is None or loc_df.empty:
+            return
+
+        # 컬럼 매핑 (한/영 허용)
+        cols_lower = {c.lower().strip(): c for c in loc_df.columns}
+        name_col = next((cols_lower[k] for k in ["name","이름","거점","거점명","배송지"] if k in cols_lower), None)
+        addr_col = next((cols_lower[k] for k in ["address","addr","주소","address1"] if k in cols_lower), None)
+
+        if not name_col:
+            st.error("❌ 거점명 컬럼을 찾을 수 없습니다. 컬럼명을 `name` 또는 `거점명`으로 설정해주세요.")
+            return
+        if not addr_col:
+            st.error("❌ 주소 컬럼을 찾을 수 없습니다. 컬럼명을 `address` 또는 `주소`로 설정해주세요.")
+            return
+
+        existing_names = {d["name"] for d in db_data}
+        preview_rows: list[dict] = []
+        skip_dup: list[str] = []
+        parse_errors: list[str] = []
+
+        for row_num, (_, row) in enumerate(loc_df.iterrows(), start=2):
+            name = str(row.get(name_col, "")).strip()
+            addr = str(row.get(addr_col, "")).strip()
+            if not name or name.lower() == "nan":
+                parse_errors.append(f"행 {row_num}: 거점명 없음"); continue
+            if not addr or addr.lower() == "nan":
+                parse_errors.append(f"행 {row_num}: '{name}' — 주소 없음"); continue
+            if name in existing_names:
+                skip_dup.append(name); continue
+            preview_rows.append({"name": name, "address": addr})
+
+        st.markdown(
+            f"**등록 예정: {len(preview_rows)}건**"
+            + (f"  |  ⚠️ 중복 제외: {len(skip_dup)}건" if skip_dup else "")
+            + (f"  |  ❌ 오류: {len(parse_errors)}건" if parse_errors else "")
+        )
+        if parse_errors:
+            with st.expander(f"❌ 오류 목록 ({len(parse_errors)}건)"):
+                for e in parse_errors: st.caption(e)
+        if skip_dup:
+            with st.expander(f"⚠️ 중복 제외 목록 ({len(skip_dup)}건)"):
+                st.caption(", ".join(skip_dup))
+
+        if not preview_rows:
+            return
+
+        st.dataframe(
+            pd.DataFrame(preview_rows).rename(columns={"name": "거점명", "address": "주소"}),
+            hide_index=True, use_container_width=True,
+        )
+
+        if st.button(
+            f"🗺️ {len(preview_rows)}건 지오코딩 후 DB 등록",
+            type="primary", use_container_width=True, key="loc_bulk_confirm",
+        ):
+            prog = st.progress(0, text="주소 변환 중...")
+            ok_list: list[str] = []
+            fail_list: list[str] = []
+
+            for i, item in enumerate(preview_rows):
+                lat, lon, fmt_addr, err = _geocode_address(item["address"], kakao_key)
+                prog.progress((i + 1) / len(preview_rows), text=f"처리 중: {item['name']}")
+                if err or lat is None:
+                    fail_list.append(f"{item['name']} — {err or '좌표 없음'}")
+                    continue
+                success, reason = db.insert_location(item["name"], lat, lon, fmt_addr or item["address"])
+                if success:
+                    ok_list.append(item["name"])
+                else:
+                    fail_list.append(f"{item['name']} — {reason}")
+
+            prog.empty()
+            if ok_list:
+                st.success(f"✅ {len(ok_list)}개 거점이 등록됐습니다: {', '.join(ok_list)}")
+                st.session_state.db_data = db.load_locations()
+            if fail_list:
+                st.error(f"❌ {len(fail_list)}건 실패:\n" + "\n".join(f"• {f}" for f in fail_list))
+            if ok_list:
+                st.rerun()
+
+
 def render_bulk_upload(db_data: list[dict]) -> None:
     """[D12] 엑셀/CSV 일괄 업로드 + 자동 검증 패널."""
+    render_location_bulk_register(db_data, KAKAO_API_KEY)
     with st.expander("📥 배송지 일괄 업로드 (CSV / 엑셀 붙여넣기)", expanded=False):
         tab_file, tab_paste = st.tabs(["📂 파일 업로드", "📋 텍스트 붙여넣기"])
         raw_df: pd.DataFrame | None = None
